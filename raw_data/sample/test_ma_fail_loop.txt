@@ -1,0 +1,53 @@
+Analyst Notes: Apple's Automotive Ambitions and the Lidar Landscape
+By: Sarah Chen, Senior Tech Analyst, Morgan Stanley Research
+Date: March 2026 (Internal Draft — Not for Distribution)
+
+Apple Inc. (NASDAQ: AAPL) has been quietly exploring strategic options
+in the autonomous driving space for over a decade. The so-called
+"Project Titan" has consumed billions of dollars with limited tangible
+output. Sources close to the company suggest that management is finally
+shifting strategy from building a full self-driving vehicle to acquiring
+proven technology providers.
+
+Apple's cash reserves currently stand at over $60 billion, giving it
+ample firepower for mid-sized acquisitions. Last month alone, the
+company cut $10 billion in planned capital expenditure from its
+automotive division, signaling a pivot away from in-house development.
+
+The autonomous driving sensor market is projected to grow from
+$3.5 billion in 2025 to over $15 billion by 2030, representing a
+compelling entry point for a company like Apple that needs to catch
+up to Waymo and Tesla in the self-driving race.
+
+Several lidar technology companies have been rumored as potential
+targets. Luminar Technologies, with a current market cap of roughly
+$1.2 billion, has been frequently mentioned in supply chain chatter.
+AEye Inc. and Innoviz have also seen their stock prices rally on
+acquisition speculation.
+
+However, industry insiders indicate that Apple's interest may be
+focused on a smaller, privately-held lidar startup based in Southern
+California. This company was valued at approximately $300 million
+during its last funding round in 2024 and has developed a unique
+solid-state lidar architecture that could be integrated into future
+Apple products.
+
+If Apple were to successfully enter and capture even 15% of the
+autonomous driving sensor market by 2028, analysts estimate the
+combined entity could unlock over $5 billion in annual revenue by
+the end of the decade.
+
+A combined Apple-LidarCo entity would also benefit from vertical
+integration with Apple's in-house chip design (A-series and M-series
+processors), potentially reducing bill-of-materials costs by 20-30%
+compared to competitors purchasing off-the-shelf components.
+
+The deal structure remains unclear, but based on precedent transactions
+in the autonomous driving space — including Amazon's acquisition of Zoox
+and Intel's purchase of Mobileye — the acquisition would likely be
+structured as a mix of cash and stock consideration.
+
+We expect further clarity during Apple's next earnings call, where
+Tim Cook may address the company's long-term strategy in autonomous
+systems. Until then, investors should watch for regulatory filings
+that could reveal the contours of any definitive agreement.

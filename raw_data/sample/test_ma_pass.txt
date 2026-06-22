@@ -1,0 +1,24 @@
+8-K
+1/15/2026
+Advanced Micro Devices, Inc.
+Acquisition of Silo AI
+
+SANTA CLARA, Calif. – January 15, 2026 – AMD (NASDAQ: AMD) today
+announced a definitive agreement to acquire Silo AI, a leading provider
+of enterprise AI inference solutions, in an all-cash transaction valued
+at approximately $4.9 billion.
+
+Under the terms of the agreement, AMD will acquire 100% of the
+outstanding equity of Silo AI for $4.9 billion in cash. The transaction
+has been approved by the boards of directors of both companies and is
+not subject to a shareholder vote. The deal is expected to close in
+the second quarter of 2026, subject to customary regulatory approvals.
+
+"This acquisition marks a significant milestone in AMD's AI strategy,"
+said Dr. Lisa Su, Chair and CEO of AMD. "Silo AI's team and technology
+will accelerate the deployment of our end-to-end AI solutions."
+
+Silo AI, headquartered in Helsinki, Finland, brings approximately 450
+engineers and deep expertise in AI model optimization and deployment.
+Post-close, Silo AI will operate as part of AMD's Data Center Solutions
+Group.

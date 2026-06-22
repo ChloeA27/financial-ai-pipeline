@@ -1,0 +1,29 @@
+# ============================================================
+# Financial AI Pipeline — Requirements
+# Senior AI Data Engineer Take-Home
+# ============================================================
+
+# === LangGraph & LangChain Ecosystem ===
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-openai>=0.3.0
+
+# === Data Validation & Settings ===
+pydantic>=2.10.0
+pydantic-settings>=2.6.0
+
+# === Async & File I/O ===
+aiosqlite>=0.20.0
+aiofiles>=24.1.0
+
+# === LLM Client ===
+openai>=1.50.0
+
+# === Environment & Logging ===
+python-dotenv>=1.0.1
+loguru>=0.7.3
+
+# === Development & Testing ===
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+pytest-cov>=5.0.0
