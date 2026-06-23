@@ -33,6 +33,7 @@ jobs:
       - name: Golden dataset evaluation
         run: python scripts/evaluate.py --threshold 0.85 --json
         env:
+          PYTHONPATH: "."
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
 
       - name: Lint check (black)
