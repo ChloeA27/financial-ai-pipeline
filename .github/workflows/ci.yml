@@ -38,5 +38,5 @@ jobs:
 
       - name: Lint check (black)
         run: |
-          pip install black
+          pip install -r requirements-dev.txt
           black --check --diff src/ tests/ scripts/

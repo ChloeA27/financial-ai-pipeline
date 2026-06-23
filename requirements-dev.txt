@@ -1,0 +1,2 @@
+# === Development & Formatting ===
+black==25.11.0
