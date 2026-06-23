@@ -13,6 +13,11 @@ class Settings(BaseSettings):
 
     # ── Storage ──
     sqlite_db_path: str = "data/pipeline.db"
+    chromadb_path: str = "data/chromadb"
+
+    # ── RAG ──
+    rag_top_k: int = 3
+    rag_embedding_model: str = "all-MiniLM-L6-v2"
 
     # ── Pipeline ──
     max_retries: int = 3

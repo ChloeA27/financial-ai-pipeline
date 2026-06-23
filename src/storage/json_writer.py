@@ -31,7 +31,7 @@ async def write_json_output(state: dict, output_dir: str) -> None:
     out_path = Path(output_dir).resolve()
     out_path.mkdir(parents=True, exist_ok=True)
 
-    file_stem = Path(state.get("file_path", "unknown")).stem
+    file_stem = Path(state.get("file_path") or "unknown").stem
     output_file = out_path / f"{file_stem}_result.json"
 
     output_data = {

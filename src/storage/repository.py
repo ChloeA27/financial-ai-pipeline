@@ -20,6 +20,7 @@ from typing import Any
 
 from loguru import logger
 
+from src.rag.repository import save_to_vector_store
 from src.storage.db import get_connection
 from src.storage.json_writer import write_json_output
 
@@ -211,6 +212,9 @@ class ExtractionRepository:
                 new_version,
                 doc_type,
             )
+
+            # ── Write validated extraction to vector store (RAG) ──
+            await save_to_vector_store(extracted)
 
         finally:
             await conn.close()

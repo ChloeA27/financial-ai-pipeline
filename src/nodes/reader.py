@@ -112,6 +112,9 @@ async def reader_node(state: PipelineState) -> dict:
     Returns:
         A dict of state updates for LangGraph to merge.
     """
+    if state.get("error"):
+        return {}  # Short-circuit on prior error
+
     if state.get("raw_content"):
         return {}  # Already populated — no-op
 

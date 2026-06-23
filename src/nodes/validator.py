@@ -147,6 +147,53 @@ _VALIDATION_RULESETS: dict[str, list[dict[str, Any]]] = {
                 "Quarterly, Monthly, Annual, Semi-Annual, One-time."
             ),
         },
+        # ═══ Death-cross validations ═══════════════════════════════
+        # 1. Timeline Integrity — Declaration ≤ Ex-Div ≤ Record ≤ Payment
+        {
+            "field": "__cross__timeline",
+            "check": "timeline_order",
+            "severity": "CRITICAL",
+            "message": (
+                "Timeline integrity violation — dividend dates are not in "
+                "strict chronological order."
+            ),
+            "fields": [
+                "declaration_date",
+                "ex_dividend_date",
+                "record_date",
+                "payment_date",
+            ],
+        },
+        # 2. Amount-Currency Co-existence — amount requires currency
+        {
+            "field": "__cross__amount_vs_currency",
+            "check": "amount_requires_currency",
+            "severity": "HIGH",
+            "message": (
+                "Dividend cash amount present but currency is missing — "
+                "amount without currency code is invalid financial data."
+            ),
+            "amount_field": "dividend_cash_amount",
+            "currency_field": "currency",
+        },
+        # 3. Empty Action Guard — at least one meaningful field must exist
+        {
+            "field": "__cross__empty_action",
+            "check": "not_all_empty",
+            "severity": "CRITICAL",
+            "message": (
+                "All dividend fields are empty — document may not be a "
+                "dividend announcement, or LLM failed to extract."
+            ),
+            "fields": [
+                "dividend_cash_amount",
+                "dividend_type",
+                "declaration_date",
+                "ex_dividend_date",
+                "record_date",
+                "payment_date",
+            ],
+        },
     ],
 }
 
@@ -222,7 +269,7 @@ def _check_not_equal(data: dict[str, Any], fields: list[str]) -> tuple[bool, str
 
     if v1 == v2:
         return False, (
-            f"[CRITICAL] Cross-field check failed: '{fields[0]}' == '{fields[1]}' "
+            f"Cross-field check failed: '{fields[0]}' == '{fields[1]}' "
             f"(both are '{data.get(fields[0])}'). "
             f"Values cannot be identical."
         )
@@ -257,7 +304,7 @@ def _check_timeline_order(data: dict[str, Any], fields: list[str]) -> tuple[bool
     for earlier, later in pairs:
         if dates[earlier] > dates[later]:
             return False, (
-                f"[CRITICAL] Timeline integrity violation: '{earlier}'"
+                f"Timeline integrity violation: '{earlier}'"
                 f" ({dates[earlier]}) is AFTER '{later}' ({dates[later]})."
                 f" Must satisfy: declaration_date ≤ ex_dividend_date ≤"
                 f" record_date ≤ payment_date."
@@ -278,7 +325,7 @@ def _check_amount_requires_currency(
 
     if amount is not None and (currency is None or currency == ""):
         return False, (
-            f"[HIGH] Amount-currency co-existence violation: '{amount_field}' ="
+            f"Amount-currency co-existence violation: '{amount_field}' ="
             f" {amount!r} but '{currency_field}' is missing or empty."
             f" A cash amount without a currency code is invalid financial data."
         )
@@ -302,7 +349,7 @@ def _check_not_all_empty(data: dict[str, Any], fields: list[str]) -> tuple[bool,
     if all_empty:
         field_list = ", ".join(fields)
         return False, (
-            f"[CRITICAL] Empty action check failed: all dividend fields"
+            f"Empty action check failed: all dividend fields"
             f" ({field_list}) are empty/None. This suggests the document"
             f" may not actually be a dividend announcement, or the LLM"
             f" failed to extract any meaningful data."
@@ -335,9 +382,35 @@ def _run_rule(rule: dict[str, Any], data: dict[str, Any]) -> tuple[bool, str]:
     field = rule["field"]
     check_name = rule["check"]
 
-    # ── Cross-field check ──
+    # ── Cross-field check: not_equal ──
     if check_name == "not_equal":
-        return _check_not_equal(data, rule.get("fields", []))
+        passed, msg = _check_not_equal(data, rule.get("fields", []))
+        if not passed:
+            return False, f"[{rule['severity']}] {msg}"
+        return True, ""
+
+    # ── Cross-field check: timeline_order ──
+    if check_name == "timeline_order":
+        passed, msg = _check_timeline_order(data, rule.get("fields", []))
+        if not passed:
+            return False, f"[{rule['severity']}] {msg}"
+        return True, ""
+
+    # ── Cross-field check: amount_requires_currency ──
+    if check_name == "amount_requires_currency":
+        passed, msg = _check_amount_requires_currency(
+            data, rule.get("amount_field", ""), rule.get("currency_field", "")
+        )
+        if not passed:
+            return False, f"[{rule['severity']}] {msg}"
+        return True, ""
+
+    # ── Cross-field check: not_all_empty ──
+    if check_name == "not_all_empty":
+        passed, msg = _check_not_all_empty(data, rule.get("fields", []))
+        if not passed:
+            return False, f"[{rule['severity']}] {msg}"
+        return True, ""
 
     # ── Allowed-values check ──
     if check_name == "allowed_values":

@@ -28,8 +28,9 @@ logs/*.log.*
 *.swp
 .DS_Store
 
-# Personal notes
+# Personal notes — not suitable for public sharing
 WORKFLOW_LOG.md
+DOCS_BACKGROUND.md
 
 # Testing
 .coverage

@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 
 from src.config import settings
 from src.llm.client import LLMClient
+from src.rag.retriever import retrieve_context
 from src.schemas.base import Metadata
 from src.schemas.extraction.dividend import DividendExtraction, DividendExtractionResult
 from src.schemas.extraction.manda import MandaExtraction, MandaExtractionResult
@@ -147,10 +148,20 @@ async def extractor_node(state: PipelineState) -> dict:
     # Pick the system prompt
     system_prompt = EXTRACTOR_PROMPTS.get(doc_type, _get_default_prompt(doc_type))
 
-    # ── Build the user prompt — include correction feedback on retries ──
+    # ── Build the user prompt — include RAG context + correction feedback ──
+    # RAG context: only on first pass (correction_feedback will handle retries)
     correction_feedback = _build_correction_feedback(state)
     user_prompt = f"Extract from this announcement:\n\n{raw_content[:6000]}"
-    if correction_feedback:
+
+    if not correction_feedback:
+        # First pass → inject RAG context from historical extractions
+        rag_context = await retrieve_context(
+            doc_type=doc_type,
+            query_text=raw_content[:1000],
+        )
+        if rag_context:
+            user_prompt = rag_context + "\n" + user_prompt
+    else:
         user_prompt += (
             "\n\n─── PREVIOUS VALIDATION FEEDBACK (correct these issues) ───\n"
             f"{correction_feedback}"
