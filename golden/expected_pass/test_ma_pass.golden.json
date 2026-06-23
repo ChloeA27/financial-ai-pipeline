@@ -1,0 +1,26 @@
+{
+  "source_file": "test_ma_pass.txt",
+  "doc_type": "M&A",
+  "validation_passed": true,
+  "fields": {
+    "acquirer": "Advanced Micro Devices, Inc.",
+    "target": "Silo AI",
+    "total_value_usd": 4900000000.0,
+    "stake_percentage": 100.0,
+    "requires_shareholder_approval": false,
+    "payment_method": "Cash",
+    "announcement_date": "2026-01-15",
+    "expected_close_date": "2026-06-30"
+  },
+  "_field_eval_overrides": {
+    "expected_close_date": {
+      "mode": "date_range",
+      "accept_null": true,
+      "range_start": "2026-04-01",
+      "range_end": "2026-06-30"
+    }
+  },
+  "_field_notes": {
+    "expected_close_date": "Source says 'Q2 2026'; accept any date in range or null"
+  }
+}

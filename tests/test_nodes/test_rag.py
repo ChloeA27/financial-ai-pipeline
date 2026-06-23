@@ -134,7 +134,9 @@ class TestEmbedder:
         sim_ac = cosine_sim(vec_a, vec_c)
 
         assert sim_ab > 0.5, f"Similar texts should have high cosine sim, got {sim_ab}"
-        assert sim_ac < sim_ab, "Unrelated texts should be less similar than related ones"
+        assert (
+            sim_ac < sim_ab
+        ), "Unrelated texts should be less similar than related ones"
 
 
 # ════════════════════════════════════════════════════════════════
@@ -302,9 +304,7 @@ class TestRagRetriever:
         await save_to_vector_store(sample_dividend_vector_data)
 
         manda_result = await retrieve_context("M&A", "dividend payment quarterly")
-        dividend_result = await retrieve_context(
-            "Dividend", "merger acquisition"
-        )
+        dividend_result = await retrieve_context("Dividend", "merger acquisition")
 
         # M&A collection shouldn't have dividend content
         if manda_result:

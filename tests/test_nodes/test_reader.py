@@ -38,6 +38,7 @@ class TestInitPipelineState:
     def test_max_retries_from_settings(self) -> None:
         """max_retries should come from the Settings object."""
         from src.config import settings
+
         state = _init_pipeline_state("/tmp/test.txt", "content")
         assert state["max_retries"] == settings.max_retries
 
@@ -80,9 +81,7 @@ class TestReadSingleFile:
 
     async def test_empty_file_returns_empty_content(self) -> None:
         """An empty file should have raw_content == ''."""
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f_path = f.name
 
         try:
@@ -221,7 +220,10 @@ class TestReaderNode:
         }
         result = await reader_node(state)
         assert "error" in result
-        assert "FileNotFoundError" in result["error"] or "not found" in result["error"].lower()
+        assert (
+            "FileNotFoundError" in result["error"]
+            or "not found" in result["error"].lower()
+        )
 
     async def test_langgraph_node_short_circuit_on_error(self) -> None:
         """If state already has error, reader_node should skip."""

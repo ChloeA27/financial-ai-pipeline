@@ -22,6 +22,7 @@ from src.storage.json_writer import write_json_output
 #  Fixtures
 # ═══════════════════════════════════════════════════════════════════
 
+
 @pytest.fixture
 async def tmp_db(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[str, None]:
     """Create a temporary SQLite database for testing.
@@ -34,6 +35,7 @@ async def tmp_db(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[str, None]:
         db_path = f.name
 
     from src.config import settings
+
     monkeypatch.setattr(settings, "sqlite_db_path", db_path)
 
     await init_db()
@@ -117,6 +119,7 @@ def failed_extraction_state() -> dict[str, Any]:
 #  DB initialization
 # ═══════════════════════════════════════════════════════════════════
 
+
 class TestDBInit:
     async def test_init_db_creates_tables(self, tmp_db: str) -> None:
         """After init_db, the 4 core tables should exist."""
@@ -150,6 +153,7 @@ class TestDBInit:
 # ═══════════════════════════════════════════════════════════════════
 #  Repository — Branch A (upsert extraction)
 # ═══════════════════════════════════════════════════════════════════
+
 
 class TestRepositoryUpsert:
     async def test_save_new_extraction(
@@ -194,7 +198,9 @@ class TestRepositoryUpsert:
 
         # Modify content (simulate file edit)
         changed_state = dict(passed_extraction_state)
-        changed_state["raw_content"] = "Modified: Microsoft to acquire Activision for $70B."
+        changed_state["raw_content"] = (
+            "Modified: Microsoft to acquire Activision for $70B."
+        )
 
         # Need a new doc_id since the test's extracted_data has a fixed one
         changed_extracted = dict(changed_state["extracted_data"])
@@ -264,6 +270,7 @@ class TestRepositoryUpsert:
 #  Repository — Branch B (Dead Letter Queue)
 # ═══════════════════════════════════════════════════════════════════
 
+
 class TestRepositoryDLQ:
     async def test_failed_state_goes_to_dlq(
         self, tmp_db: str, failed_extraction_state: dict[str, Any]
@@ -302,6 +309,7 @@ class TestRepositoryDLQ:
 #  JSON writer
 # ═══════════════════════════════════════════════════════════════════
 
+
 class TestJSONWriter:
     async def test_write_json_output(
         self, tmp_output_dir: str, passed_extraction_state: dict[str, Any]
@@ -334,7 +342,8 @@ class TestJSONWriter:
         assert data["error"] is not None
 
     async def test_json_output_unknown_file(
-        self, tmp_output_dir: str,
+        self,
+        tmp_output_dir: str,
     ) -> None:
         """If file_path is missing, the writer should use 'unknown' as stem."""
         state = {"file_path": None, "extracted_data": {}, "doc_type": None}
@@ -347,6 +356,7 @@ class TestJSONWriter:
 # ═══════════════════════════════════════════════════════════════════
 #  Repository + JSON dual-write integration
 # ═══════════════════════════════════════════════════════════════════
+
 
 class TestRepositoryDualWrite:
     async def test_save_with_output_dir_writes_both(

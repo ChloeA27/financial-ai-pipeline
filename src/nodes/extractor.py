@@ -50,7 +50,6 @@ Respond with valid JSON containing ONLY these fields (all optional, use null if 
 - payment_method = one of: "Cash", "Stock", "Cash + Stock", "Asset Swap", "Other".
 - announcement_date = YYYY-MM-DD format.
 - expected_close_date = YYYY-MM-DD format, or null if not stated.""",
-
     "Dividend": """You are a financial data extractor for corporate dividend announcements.
 Extract the dividend distribution details from the announcement below.
 
@@ -95,7 +94,9 @@ def _resolve_model(doc_type: str) -> type:
     """Return the LLM-facing Pydantic model class for a given doc_type."""
     model = EXTRACTOR_MODELS.get(doc_type)
     if model is None:
-        raise ValueError(f"extractor_node: no model registered for doc_type='{doc_type}'")
+        raise ValueError(
+            f"extractor_node: no model registered for doc_type='{doc_type}'"
+        )
     return model
 
 

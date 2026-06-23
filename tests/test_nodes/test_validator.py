@@ -28,6 +28,7 @@ from src.nodes.validator import (
 #  Unit: individual check functions
 # ═══════════════════════════════════════════════════════════════════
 
+
 class TestCheckNonEmpty:
     def test_valid_string(self) -> None:
         assert _check_non_empty("Microsoft") is True
@@ -109,7 +110,9 @@ class TestCheckDateFormat:
         assert _check_date_format("04/30/2026") is False
 
     def test_invalid_month(self) -> None:
-        assert _check_date_format("2026-13-01") is True  # regex doesn't validate calendar logic
+        assert (
+            _check_date_format("2026-13-01") is True
+        )  # regex doesn't validate calendar logic
 
     def test_none(self) -> None:
         """None is NOT allowed — missing date should fail validation."""
@@ -209,24 +212,32 @@ class TestCheckTimelineOrder:
 class TestCheckAmountRequiresCurrency:
     def test_amount_with_currency(self) -> None:
         data = {"dividend_cash_amount": 0.52, "currency": "USD"}
-        passed, msg = _check_amount_requires_currency(data, "dividend_cash_amount", "currency")
+        passed, msg = _check_amount_requires_currency(
+            data, "dividend_cash_amount", "currency"
+        )
         assert passed is True
 
     def test_amount_no_currency(self) -> None:
         data = {"dividend_cash_amount": 0.52, "currency": None}
-        passed, msg = _check_amount_requires_currency(data, "dividend_cash_amount", "currency")
+        passed, msg = _check_amount_requires_currency(
+            data, "dividend_cash_amount", "currency"
+        )
         assert passed is False
         assert "currency" in msg.lower()
 
     def test_no_amount_no_currency(self) -> None:
         """If neither is present, that's fine."""
         data = {"dividend_cash_amount": None, "currency": None}
-        passed, msg = _check_amount_requires_currency(data, "dividend_cash_amount", "currency")
+        passed, msg = _check_amount_requires_currency(
+            data, "dividend_cash_amount", "currency"
+        )
         assert passed is True
 
     def test_amount_with_empty_currency(self) -> None:
         data = {"dividend_cash_amount": 0.52, "currency": ""}
-        passed, msg = _check_amount_requires_currency(data, "dividend_cash_amount", "currency")
+        passed, msg = _check_amount_requires_currency(
+            data, "dividend_cash_amount", "currency"
+        )
         assert passed is False
 
 
@@ -241,8 +252,12 @@ class TestCheckNotAllEmpty:
             "payment_date": None,
         }
         fields = [
-            "dividend_cash_amount", "dividend_type", "declaration_date",
-            "ex_dividend_date", "record_date", "payment_date",
+            "dividend_cash_amount",
+            "dividend_type",
+            "declaration_date",
+            "ex_dividend_date",
+            "record_date",
+            "payment_date",
         ]
         passed, msg = _check_not_all_empty(data, fields)
         assert passed is True
@@ -257,8 +272,12 @@ class TestCheckNotAllEmpty:
             "payment_date": None,
         }
         fields = [
-            "dividend_cash_amount", "dividend_type", "declaration_date",
-            "ex_dividend_date", "record_date", "payment_date",
+            "dividend_cash_amount",
+            "dividend_type",
+            "declaration_date",
+            "ex_dividend_date",
+            "record_date",
+            "payment_date",
         ]
         passed, msg = _check_not_all_empty(data, fields)
         assert passed is False
@@ -274,8 +293,12 @@ class TestCheckNotAllEmpty:
             "payment_date": None,
         }
         fields = [
-            "dividend_cash_amount", "dividend_type", "declaration_date",
-            "ex_dividend_date", "record_date", "payment_date",
+            "dividend_cash_amount",
+            "dividend_type",
+            "declaration_date",
+            "ex_dividend_date",
+            "record_date",
+            "payment_date",
         ]
         passed, msg = _check_not_all_empty(data, fields)
         assert passed is False  # 0.0 is treated as empty — v == 0.0 check
@@ -285,48 +308,84 @@ class TestCheckNotAllEmpty:
 #  Unit: _run_rule
 # ═══════════════════════════════════════════════════════════════════
 
+
 class TestRunRule:
     def test_non_empty_pass(self) -> None:
         data = {"acquirer": "Microsoft"}
-        rule = {"field": "acquirer", "check": "non_empty", "severity": "CRITICAL", "message": "Missing"}
+        rule = {
+            "field": "acquirer",
+            "check": "non_empty",
+            "severity": "CRITICAL",
+            "message": "Missing",
+        }
         passed, msg = _run_rule(rule, data)
         assert passed is True
 
     def test_non_empty_fail(self) -> None:
         data = {"acquirer": ""}
-        rule = {"field": "acquirer", "check": "non_empty", "severity": "CRITICAL", "message": "Missing"}
+        rule = {
+            "field": "acquirer",
+            "check": "non_empty",
+            "severity": "CRITICAL",
+            "message": "Missing",
+        }
         passed, msg = _run_rule(rule, data)
         assert passed is False
         assert "[CRITICAL]" in msg
 
     def test_positive_pass(self) -> None:
         data = {"total_value_usd": 68.7}
-        rule = {"field": "total_value_usd", "check": "positive", "severity": "HIGH", "message": "Not positive"}
+        rule = {
+            "field": "total_value_usd",
+            "check": "positive",
+            "severity": "HIGH",
+            "message": "Not positive",
+        }
         passed, msg = _run_rule(rule, data)
         assert passed is True
 
     def test_positive_fail(self) -> None:
         data = {"total_value_usd": 0}
-        rule = {"field": "total_value_usd", "check": "positive", "severity": "HIGH", "message": "Not positive"}
+        rule = {
+            "field": "total_value_usd",
+            "check": "positive",
+            "severity": "HIGH",
+            "message": "Not positive",
+        }
         passed, msg = _run_rule(rule, data)
         assert passed is False
 
     def test_allowed_values_pass(self) -> None:
         data = {"currency": "USD"}
-        rule = {"field": "currency", "check": "allowed_values", "severity": "MEDIUM", "message": "Bad currency"}
+        rule = {
+            "field": "currency",
+            "check": "allowed_values",
+            "severity": "MEDIUM",
+            "message": "Bad currency",
+        }
         passed, msg = _run_rule(rule, data)
         assert passed is True
 
     def test_allowed_values_fail(self) -> None:
         data = {"currency": "BTC"}
-        rule = {"field": "currency", "check": "allowed_values", "severity": "MEDIUM", "message": "Bad currency"}
+        rule = {
+            "field": "currency",
+            "check": "allowed_values",
+            "severity": "MEDIUM",
+            "message": "Bad currency",
+        }
         passed, msg = _run_rule(rule, data)
         assert passed is False
 
     def test_unknown_check_passes_silently(self) -> None:
         """Unknown check type should pass to avoid breaking on new checks."""
         data = {"foo": "bar"}
-        rule = {"field": "foo", "check": "unknown_check_type", "severity": "LOW", "message": "Unknown"}
+        rule = {
+            "field": "foo",
+            "check": "unknown_check_type",
+            "severity": "LOW",
+            "message": "Unknown",
+        }
         passed, msg = _run_rule(rule, data)
         assert passed is True
 
@@ -334,6 +393,7 @@ class TestRunRule:
 # ═══════════════════════════════════════════════════════════════════
 #  Node-level tests: validator_node
 # ═══════════════════════════════════════════════════════════════════
+
 
 class TestValidatorNode:
     """Test the validator_node function with various PipelineState inputs."""
@@ -372,7 +432,9 @@ class TestValidatorNode:
         # Should contain the cross-field not_equal failure
         assert any("identical" in log["error_summary"].lower() for log in logs)
 
-    async def test_dividend_passes(self, dividend_pipeline_state: dict[str, Any]) -> None:
+    async def test_dividend_passes(
+        self, dividend_pipeline_state: dict[str, Any]
+    ) -> None:
         """Clean Dividend data should pass all validation rules."""
         result = await validator_node(dividend_pipeline_state)
         assert result.get("validation_passed") is True
@@ -434,7 +496,9 @@ class TestValidatorNode:
         logs = result.get("correction_logs", [])
         assert any("empty" in log["error_summary"].lower() for log in logs)
 
-    async def test_no_extracted_data(self, sample_pipeline_state: dict[str, Any]) -> None:
+    async def test_no_extracted_data(
+        self, sample_pipeline_state: dict[str, Any]
+    ) -> None:
         """If extracted_data is None, validator should set error."""
         state = dict(sample_pipeline_state)
         state["extracted_data"] = None
@@ -452,7 +516,9 @@ class TestValidatorNode:
         assert result.get("validation_passed") is True
         assert "No validation rules" in (result.get("validation_report") or "")
 
-    async def test_retry_exhaustion(self, sample_pipeline_state: dict[str, Any]) -> None:
+    async def test_retry_exhaustion(
+        self, sample_pipeline_state: dict[str, Any]
+    ) -> None:
         """After max retries, validator should set error for DLQ routing."""
         state = dict(sample_pipeline_state)
         state["extracted_data"] = dict(state["extracted_data"])
@@ -485,7 +551,9 @@ class TestValidatorNode:
         assert "acquirer" in summary.lower() or "target" in summary.lower()
         assert "total_value_usd" in summary.lower()
 
-    async def test_short_circuit_on_error(self, sample_pipeline_state: dict[str, Any]) -> None:
+    async def test_short_circuit_on_error(
+        self, sample_pipeline_state: dict[str, Any]
+    ) -> None:
         """If state already has error, validator should skip."""
         state = dict(sample_pipeline_state)
         state["error"] = "Previous node failed"

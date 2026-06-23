@@ -1,0 +1,6 @@
+{
+  "source_file": "test_ma_fail_loop.txt",
+  "doc_type": null,
+  "validation_passed": false,
+  "_notes": "Speculative analyst report, not a definitive agreement. Pipeline should classify as 'Unknown' or fail validation after exhausting retries. doc_type is null — not enforced. Only validation_passed == false is checked."
+}

@@ -1,0 +1,18 @@
+{
+  "source_file": "dividend_apple_2026.txt",
+  "doc_type": "Dividend",
+  "validation_passed": true,
+  "fields": {
+    "ticker": "AAPL",
+    "declaration_date": "2026-04-30",
+    "dividend_cash_amount": 0.52,
+    "currency": "USD",
+    "record_date": "2026-05-12",
+    "ex_dividend_date": "2026-05-08",
+    "payment_date": "2026-05-21",
+    "dividend_type": "Regular Cash",
+    "frequency": "Quarterly"
+  },
+  "_field_eval_overrides": {},
+  "_field_notes": {}
+}

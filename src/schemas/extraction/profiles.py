@@ -27,6 +27,7 @@ class BaseValidationProfile:
         ``ALLOWED_CURRENCIES`` → validates Pydantic field ``currency``
         ``ALLOWED_FREQUENCIES`` → validates Pydantic field ``frequency``
     """
+
     pass
 
 
@@ -34,13 +35,28 @@ class DividendValidationProfile(BaseValidationProfile):
     """Dividend allowed-value constraints — single maintenance point."""
 
     ALLOWED_CURRENCIES: ClassVar[set[str]] = {
-        "USD", "EUR", "CNY", "HKD", "GBP", "JPY", "CAD", "AUD", "SGD",
+        "USD",
+        "EUR",
+        "CNY",
+        "HKD",
+        "GBP",
+        "JPY",
+        "CAD",
+        "AUD",
+        "SGD",
     }
     ALLOWED_DIVIDEND_TYPES: ClassVar[set[str]] = {
-        "Regular Cash", "Special Cash", "Stock", "Property",
+        "Regular Cash",
+        "Special Cash",
+        "Stock",
+        "Property",
     }
     ALLOWED_FREQUENCIES: ClassVar[set[str]] = {
-        "Quarterly", "Monthly", "Semi-Annual", "Annual", "One-time",
+        "Quarterly",
+        "Monthly",
+        "Semi-Annual",
+        "Annual",
+        "One-time",
     }
 
 
@@ -48,5 +64,9 @@ class MandaValidationProfile(BaseValidationProfile):
     """M&A allowed-value constraints."""
 
     ALLOWED_PAYMENT_METHODS: ClassVar[set[str]] = {
-        "Cash", "Stock", "Cash + Stock", "Asset Swap", "Other",
+        "Cash",
+        "Stock",
+        "Cash + Stock",
+        "Asset Swap",
+        "Other",
     }

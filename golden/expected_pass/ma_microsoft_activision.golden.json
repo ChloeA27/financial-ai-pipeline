@@ -1,0 +1,26 @@
+{
+  "source_file": "ma_microsoft_activision.txt",
+  "doc_type": "M&A",
+  "validation_passed": true,
+  "fields": {
+    "acquirer": "Microsoft Corp.",
+    "target": "Activision Blizzard, Inc.",
+    "total_value_usd": 68700000000.0,
+    "stake_percentage": 100.0,
+    "requires_shareholder_approval": true,
+    "payment_method": "Cash",
+    "announcement_date": "2022-01-18",
+    "expected_close_date": "2023-06-30"
+  },
+  "_field_eval_overrides": {
+    "expected_close_date": {
+      "mode": "date_range",
+      "accept_null": true,
+      "range_start": "2023-01-01",
+      "range_end": "2023-12-31"
+    }
+  },
+  "_field_notes": {
+    "expected_close_date": "Source says 'fiscal year 2023'; golden uses FY end. Accept any date in FY2023 or null"
+  }
+}

@@ -105,9 +105,7 @@ async def _process_batch_concurrent(
     await calls, we launch N pipeline executions in parallel,
     each making independent LLM calls.
     """
-    file_paths: list[str] = [
-        s["file_path"] for s in states if s.get("file_path")
-    ]
+    file_paths: list[str] = [s["file_path"] for s in states if s.get("file_path")]
 
     logger.info("🚀 Launching {} pipeline(s) concurrently...", len(file_paths))
     start = time.perf_counter()
@@ -144,9 +142,7 @@ async def _process_batch_concurrent(
     return results
 
 
-async def _gather_with_semaphore(
-    file_paths: list[str], concurrency: int = 5
-) -> list:
+async def _gather_with_semaphore(file_paths: list[str], concurrency: int = 5) -> list:
     """
     Run pipeline invocations concurrently with a semaphore to
     avoid overwhelming the LLM API with too many simultaneous requests.

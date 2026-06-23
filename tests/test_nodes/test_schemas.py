@@ -29,6 +29,7 @@ from src.schemas.extraction.dividend import DividendExtraction, DividendExtracti
 #  Profile definitions
 # ═══════════════════════════════════════════════════════════════════
 
+
 class TestValidationProfiles:
     def test_dividend_profile_has_required_sets(self) -> None:
         assert "USD" in DividendValidationProfile.ALLOWED_CURRENCIES
@@ -43,6 +44,7 @@ class TestValidationProfiles:
 
     def test_profile_inheritance(self) -> None:
         """Create a hypothetical HK profile that inherits and adds CNH."""
+
         class HKProfile(DividendValidationProfile):
             ALLOWED_CURRENCIES = DividendValidationProfile.ALLOWED_CURRENCIES | {"CNH"}
 
@@ -53,6 +55,7 @@ class TestValidationProfiles:
 # ═══════════════════════════════════════════════════════════════════
 #  ProfileValidatorMixin & BaseExtractionModel
 # ═══════════════════════════════════════════════════════════════════
+
 
 class TestProfileValidatorMixin:
     def test_allowed_values_injected_automatically(self) -> None:
@@ -147,13 +150,16 @@ class TestProfileValidatorMixin:
                 frequency="Quarterly",
             )
 
-    @pytest.mark.parametrize("bad_date", [
-        "2026-4-30",      # missing leading zero
-        "2026/04/30",     # wrong separator
-        "30-04-2026",     # DD-MM-YYYY
-        "not-a-date",     # random text
-        "",               # empty string
-    ])
+    @pytest.mark.parametrize(
+        "bad_date",
+        [
+            "2026-4-30",  # missing leading zero
+            "2026/04/30",  # wrong separator
+            "30-04-2026",  # DD-MM-YYYY
+            "not-a-date",  # random text
+            "",  # empty string
+        ],
+    )
     def test_various_bad_date_formats(self, bad_date: str) -> None:
         with pytest.raises(ValidationError, match="must be YYYY-MM-DD"):
             DividendExtraction(
@@ -180,6 +186,7 @@ class TestProfileValidatorMixin:
 # ═══════════════════════════════════════════════════════════════════
 #  Two-Model Protocol: Dividend
 # ═══════════════════════════════════════════════════════════════════
+
 
 class TestDividendTwoModelProtocol:
     def test_model_a_has_no_traceability_fields(self) -> None:
@@ -238,7 +245,8 @@ class TestDividendTwoModelProtocol:
             doc_type="Dividend",
         )
         result = DividendExtractionResult.from_extraction(
-            extraction=extraction, metadata=metadata,
+            extraction=extraction,
+            metadata=metadata,
         )
         assert result.doc_id is not None
         assert len(result.doc_id) > 0  # Should be a UUID hex string
@@ -247,6 +255,7 @@ class TestDividendTwoModelProtocol:
 # ═══════════════════════════════════════════════════════════════════
 #  Two-Model Protocol: M&A
 # ═══════════════════════════════════════════════════════════════════
+
 
 class TestMandaTwoModelProtocol:
     def test_model_a_has_no_traceability_fields(self) -> None:
@@ -293,6 +302,7 @@ class TestMandaTwoModelProtocol:
 #  BaseDoc & Metadata
 # ═══════════════════════════════════════════════════════════════════
 
+
 class TestBaseDoc:
     def test_metadata_requires_source_path(self) -> None:
         """Metadata.source_path is required."""
@@ -332,6 +342,7 @@ class TestBaseDoc:
 #  _make_allowed_validator factory (edge cases)
 # ═══════════════════════════════════════════════════════════════════
 
+
 class TestMakeAllowedValidator:
     def test_injected_validators_from_mapped_profile(self) -> None:
         """ALLOWED_CURRENCIES maps to 'currency' field and auto-validates."""
@@ -355,6 +366,7 @@ class TestMakeAllowedValidator:
         the ``ValidationProfile`` class attribute (a ``type`` object) from
         being mistakenly treated as a model field.
         """
+
         class CustomProfile(BaseValidationProfile):
             ALLOWED_FRUITS = {"Apple", "Banana"}
 

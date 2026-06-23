@@ -9,9 +9,19 @@ from typing import Any
 import pytest
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """Register custom markers to avoid 'unknown marker' warnings."""
+    config.addinivalue_line(
+        "markers",
+        "integration: test that requires real LLM API calls or external services. "
+        "Skipped in CI by default (run: pytest -m 'not integration').",
+    )
+
+
 # ════════════════════════════════════════════════════════════════
 #  Sample data fixtures
 # ════════════════════════════════════════════════════════════════
+
 
 @pytest.fixture
 def sample_manda_extraction() -> dict[str, Any]:
@@ -62,7 +72,9 @@ def sample_pipeline_state(sample_manda_extraction: dict[str, Any]) -> dict[str, 
 
 
 @pytest.fixture
-def dividend_pipeline_state(sample_dividend_extraction: dict[str, Any]) -> dict[str, Any]:
+def dividend_pipeline_state(
+    sample_dividend_extraction: dict[str, Any],
+) -> dict[str, Any]:
     """A minimal PipelineState dict for Dividend as it reaches the Validator."""
     return {
         "file_path": "/fake/path/dividend_test.txt",

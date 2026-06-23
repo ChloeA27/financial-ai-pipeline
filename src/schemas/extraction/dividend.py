@@ -56,7 +56,9 @@ class DividendExtraction(BaseExtractionModel):
     Zero manually-defined ``@field_validator`` in this class.
     """
 
-    ValidationProfile: ClassVar[type[DividendValidationProfile]] = DividendValidationProfile
+    ValidationProfile: ClassVar[type[DividendValidationProfile]] = (
+        DividendValidationProfile
+    )
 
     ticker: Optional[str] = Field(
         default=None,
@@ -125,7 +127,9 @@ class DividendExtractionResult(BaseDoc, ProfileValidatorMixin):
     also auto-injected via the ``*_date`` naming convention.
     """
 
-    ValidationProfile: ClassVar[type[DividendValidationProfile]] = DividendValidationProfile
+    ValidationProfile: ClassVar[type[DividendValidationProfile]] = (
+        DividendValidationProfile
+    )
 
     ticker: Optional[str] = Field(default=None)
     declaration_date: Optional[str] = Field(default=None)

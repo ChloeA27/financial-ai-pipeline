@@ -169,9 +169,7 @@ class ExtractionRepository:
                     doc_type,
                     json.dumps(business_data, ensure_ascii=False),
                     new_version,
-                    (extracted.get("metadata") or {}).get(
-                        "pipeline_version", "1.0.0"
-                    ),
+                    (extracted.get("metadata") or {}).get("pipeline_version", "1.0.0"),
                     (extracted.get("metadata") or {}).get("model_name", ""),
                     retry_count,
                     now,

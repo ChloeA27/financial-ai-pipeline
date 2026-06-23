@@ -62,7 +62,9 @@ async def save_to_vector_store(extracted_data: dict[str, Any]) -> None:
     doc_type = metadata.get("doc_type", "")
 
     if not doc_type:
-        logger.warning("⏭️  save_to_vector_store: missing doc_type in metadata → skipping")
+        logger.warning(
+            "⏭️  save_to_vector_store: missing doc_type in metadata → skipping"
+        )
         return
 
     # ── Build the document text (business fields only) ──
@@ -94,6 +96,4 @@ async def save_to_vector_store(extracted_data: dict[str, Any]) -> None:
         )
     except Exception as exc:
         # Non-fatal — vector store failure should not crash pipeline
-        logger.error(
-            "⚠️  save_to_vector_store failed for doc_id={}: {}", doc_id, exc
-        )
+        logger.error("⚠️  save_to_vector_store failed for doc_id={}: {}", doc_id, exc)

@@ -97,8 +97,7 @@ _VALIDATION_RULESETS: dict[str, list[dict[str, Any]]] = {
             "check": "positive",
             "severity": "HIGH",
             "message": (
-                "Dividend cash amount per share is missing, "
-                "zero, or negative."
+                "Dividend cash amount per share is missing, " "zero, or negative."
             ),
         },
         {
@@ -469,9 +468,7 @@ async def validator_node(state: PipelineState) -> dict:
     if not extracted_data:
         return {
             "validation_passed": False,
-            "validation_report": (
-                "validator_node: no extracted_data found in state."
-            ),
+            "validation_report": ("validator_node: no extracted_data found in state."),
             "error": "validator_node: no extracted_data found in state.",
         }
 

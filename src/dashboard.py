@@ -149,7 +149,9 @@ with k4:
 # ──────────────────────────────────────────────
 #  2. Version History (Plotly)
 # ──────────────────────────────────────────────
-st.markdown('<div class="section-title">📈 Asset Version History</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="section-title">📈 Asset Version History</div>', unsafe_allow_html=True
+)
 
 if len(df):
     fig = px.bar(
@@ -191,9 +193,7 @@ st.markdown(
 if df_dlq.empty:
     st.success("🎉 Dead Letter Queue is empty! All documents processed successfully.")
 else:
-    st.error(
-        f"⚠️ {len(df_dlq)} document(s) permanently failed and entered the DLQ:"
-    )
+    st.error(f"⚠️ {len(df_dlq)} document(s) permanently failed and entered the DLQ:")
     for _, row in df_dlq.iterrows():
         with st.expander(f"💥 {Path(row.file_path).name}"):
             st.json(
@@ -275,4 +275,6 @@ else:
 #  5. Footer
 # ──────────────────────────────────────────────
 st.markdown("---")
-st.caption("🔐 Financial AI Pipeline · Senior AI Data Engineer · Industrial-Grade Unstructured Financial Data Extraction Platform")
+st.caption(
+    "🔐 Financial AI Pipeline · Senior AI Data Engineer · Industrial-Grade Unstructured Financial Data Extraction Platform"
+)

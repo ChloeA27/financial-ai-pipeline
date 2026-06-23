@@ -43,9 +43,7 @@ def _make_allowed_validator(field_name: str, allowed_attr: str) -> classmethod:
         if allowed is None:
             return v
         if v not in allowed:
-            raise ValueError(
-                f"'{field_name}' = {v!r} not in allowed set: {allowed}"
-            )
+            raise ValueError(f"'{field_name}' = {v!r} not in allowed set: {allowed}")
         return v
 
     # Unique name prevents Pydantic from deduplicating across subclasses

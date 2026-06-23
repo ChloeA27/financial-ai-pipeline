@@ -16,6 +16,7 @@ from src.graph.builder import _route_after_validation, run_pipeline
 #  Conditional edge router
 # ═══════════════════════════════════════════════════════════════════
 
+
 class TestRouteAfterValidation:
     """Unit tests for the _route_after_validation conditional edge function."""
 
@@ -112,6 +113,7 @@ class TestRouteAfterValidation:
 #  run_pipeline (integration-light, files exist on disk)
 # ═══════════════════════════════════════════════════════════════════
 
+
 class TestRunPipeline:
     """High-level pipeline execution with real file I/O."""
 
@@ -120,10 +122,11 @@ class TestRunPipeline:
         with pytest.raises(FileNotFoundError):
             await run_pipeline("/tmp/nonexistent_file_12345.txt")
 
+    @pytest.mark.integration
     async def test_pipeline_state_structure(self) -> None:
         """Running on a real file should return a well-structured state."""
-        # Use a sample file that ships with the repo
         import os
+
         sample_path = "raw_data/sample/test_ma_pass.txt"
         if not os.path.exists(sample_path):
             pytest.skip(f"Sample file not found: {sample_path}")
@@ -147,9 +150,11 @@ class TestRunPipeline:
         # raw_content should be non-empty
         assert len(result.get("raw_content", "")) > 0
 
+    @pytest.mark.integration
     async def test_pipeline_routes_all_nodes(self) -> None:
         """The pipeline should execute all nodes (reader → classifier → extractor → validator)."""
         import os
+
         sample_path = "raw_data/sample/test_ma_pass.txt"
         if not os.path.exists(sample_path):
             pytest.skip("Sample file not found")
@@ -161,14 +166,21 @@ class TestRunPipeline:
         assert result["doc_type"] in ("M&A", "Dividend", "Management_Change", "Unknown")
 
         # extracted_data should be populated (even if extraction failed)
-        assert result.get("extracted_data") is not None or result.get("error") is not None
+        assert (
+            result.get("extracted_data") is not None or result.get("error") is not None
+        )
 
         # validation should have run
-        assert result.get("validation_passed") is not None or result.get("error") is not None
+        assert (
+            result.get("validation_passed") is not None
+            or result.get("error") is not None
+        )
 
+    @pytest.mark.integration
     async def test_pipeline_idempotent_state_keys(self) -> None:
         """Running twice on the same file should produce the same key structure."""
         import os
+
         sample_path = "raw_data/sample/test_ma_pass.txt"
         if not os.path.exists(sample_path):
             pytest.skip("Sample file not found")
@@ -180,8 +192,14 @@ class TestRunPipeline:
         keys1 = set(result1.keys())
         keys2 = set(result2.keys())
         # Core keys that must always be present
-        for key in ("file_path", "raw_content", "doc_type",
-                    "extracted_data", "validation_passed", "retry_count"):
+        for key in (
+            "file_path",
+            "raw_content",
+            "doc_type",
+            "extracted_data",
+            "validation_passed",
+            "retry_count",
+        ):
             assert key in keys1
             assert key in keys2
 
@@ -190,12 +208,15 @@ class TestRunPipeline:
 #  Edge case: file with no extractable data
 # ═══════════════════════════════════════════════════════════════════
 
+
 class TestEdgeCases:
     """Edge cases for pipeline routing."""
 
+    @pytest.mark.integration
     async def test_fail_loop_file_hits_dlq(self) -> None:
         """test_ma_fail_loop.txt should exhaust retries and hit DLQ path."""
         import os
+
         fail_path = "raw_data/sample/test_ma_fail_loop.txt"
         if not os.path.exists(fail_path):
             pytest.skip("Fail-loop sample file not found")
@@ -204,4 +225,7 @@ class TestEdgeCases:
 
         # The document is an analyst note (speculative, no concrete deal)
         # so it should either fail validation or have an error
-        assert result.get("validation_passed") is not True or result.get("error") is not None
+        assert (
+            result.get("validation_passed") is not True
+            or result.get("error") is not None
+        )

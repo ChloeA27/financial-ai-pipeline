@@ -59,7 +59,9 @@ from src.state.pipeline_state import PipelineState
 # ── Conditional edge: self-correction router ──
 
 
-def _route_after_validation(state: PipelineState) -> Literal["extractor", "__end__", "error"]:
+def _route_after_validation(
+    state: PipelineState,
+) -> Literal["extractor", "__end__", "error"]:
     """
     Decide where to go after the Validator Node finishes.
 
