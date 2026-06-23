@@ -23,7 +23,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install -e .  # editable install so `src` package is importable
 
       - name: Unit tests (no LLM calls)
         run: pytest -m "not integration" --tb=short -q
