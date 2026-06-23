@@ -18,8 +18,10 @@
 7. [Self-Correction Loop](#7-self-correction-loop)
 8. [Storage Architecture](#8-storage-architecture)
 9. [Multi-Business-Line Extension (Registry Pattern)](#9-multi-business-line-extension-registry-pattern)
-10. [Concurrency & Performance](#10-concurrency--performance)
-11. [Appendix — Physical File Map](#11-appendix--physical-file-map)
+10. [RAG-Augmented Extraction (Phase 2)](#10-rag-augmented-extraction-phase-2)
+11. [CI Golden Dataset Gate (Phase 3-C)](#11-ci-golden-dataset-gate-phase-3-c)
+12. [Concurrency & Performance](#12-concurrency--performance)
+13. [Appendix — Physical File Map](#13-appendix--physical-file-map)
 
 ---
 
@@ -52,7 +54,9 @@ Traditional approaches (regex scraping, template-based parsers) fail because:
 | **G5 — Versioned History** | When a source file is amended and re-processed, the old extraction is archived (`is_current=0`) and a new version is created — never overwritten. | SCD Type 2 `version` + `is_current` columns |
 | **G6 — Zero-Code Extension** | Adding a new document type requires schema definition only — no changes to graph topology, node logic, or persistence code. | Registry Pattern: `EXTRACTOR_MODELS`, `EXTRACTOR_RESULT_MODELS`, `EXTRACTOR_PROMPTS` |
 | **G7 — Async Concurrency** | Batch-processing N documents must not degrade to serial execution; each file runs its own independent LangGraph state machine. | `asyncio.Semaphore` + `asyncio.gather`; wall-clock time < N × single-file time |
-| **G8 — Operation Visibility** | A real-time dashboard must expose KPI cards, error panels, and audit-trail drill-downs querying the live database. | Streamlit dashboard reading `data/pipeline.db` |
+| **G8 — Operation Visibility** | Streamlit dashboard exposes KPI cards, error panels, and audit-trail drill-downs querying the live database. | Dashboard visible at `http://localhost:8501` |
+| **G9 — RAG-Augmented Extraction** | Historical validated extractions are embedded and stored in ChromaDB (per doc-type collection). On first-pass extraction, semantically similar past results are retrieved as few-shot context to improve LLM accuracy. | ChromaDB collection row count; retrieval relevance |
+| **G10 — CI Golden Dataset Gate** | Every push/PR must pass a golden dataset evaluation (field-type-aware comparison against hand-labelled expected outputs) with a configurable accuracy threshold. Pipeline regressions fail the build before deployment. | GitHub Actions CI; `scripts/evaluate.py --threshold 0.85` exit code check |
 
 ### 1.3 Non-Goals
 
@@ -108,14 +112,14 @@ raw_data/*.txt
  └────┬─────┘
       │ doc_type
       ▼
- ┌──────────┐
- │ Extractor│  LLM fills business-only Pydantic model
- │  Agent   │  → promotes to full result with Metadata
- └────┬─────┘
-      │ extracted_data
-      ▼
- ┌──────────┐
- │ Validator│  Rule-based quality gate
+ ┌──────────┐    ┌─────────────────┐
+ │ Extractor│◄───│ RAG Retriever   │  Semantic few-shot from
+ │  Agent   │    │ (ChromaDB)      │  historical extractions
+ └────┬─────┘    └─────────────────┘
+      │ extracted_data         ▲
+      ▼                        │ on validated pass
+ ┌──────────┐                  │
+ │ Validator│──────────────────┘
  │  Agent   │  self-correction loop ← ─ ─ ─ ─ ─ ─
  └────┬─────┘                                  │
       │ (pass/fail)                             │
@@ -142,6 +146,7 @@ raw_data/*.txt
 | **Immutable Version History** | SCD Type 2 — archive-on-change, never overwrite |
 | **Self-Correction** | Validator → Extractor conditional edge with structured error feedback |
 | **Zero-Code Extension** | Registry Pattern: add 1 schema file + 3 dict entries = new business line |
+| **RAG-Augmented Extraction** | ChromaDB per doc-type collection; embedding via SentenceTransformer (all-MiniLM-L6-v2); validated extractions written as vectors; first-pass extraction retrieves top-k semantic neighbours as few-shot context; retry passes do NOT re-query (avoid stale context) |
 
 ---
 
@@ -192,6 +197,8 @@ Defined as a `TypedDict` in `src/state/pipeline_state.py`:
 | `retry_count` | Validator | `int` | Current retry attempt number |
 | `max_retries` | Validator | `int` | Maximum allowed retries (configurable, default 3) |
 | `error` | Any node | `Optional[str]` | Fatal error message |
+
+> **Note:** RAG context is retrieved inside the Extractor Node — it is **not** stored in `PipelineState`. The Extractor calls `await retriever.retrieve_context(doc_type, raw_content)` before the first LLM prompt, injects results into the system message, and discards them after generation. This keeps the state schema lean and avoids serialising embedding vectors through the graph.
 
 ### 3.3 Conditional Edge Router
 
@@ -582,9 +589,193 @@ SYSTEM_PROMPT = """... ONE of:
 
 ---
 
-## 10. Concurrency & Performance
+## 10. RAG-Augmented Extraction (Phase 2)
 
-### 10.1 Async I/O Everywhere
+### 10.1 Motivation
+
+Cold-start LLM extraction — where the model sees only the system prompt and raw text — can miss domain-specific conventions (e.g., "record date" vs "ex-dividend date" in dividend announcements). A RAG (Retrieval-Augmented Generation) layer solves this by providing semantically similar past extractions as few-shot examples during the first-pass LLM call.
+
+### 10.2 Architecture
+
+```
+┌──────────────┐     on validated pass
+│  Validator   │──────────┐
+│  (pass)      │          │
+└──────────────┘          ▼
+                    ┌──────────────┐
+                    │   Embedder   │  SentenceTransformer
+                    │  (local)     │  → all-MiniLM-L6-v2
+                    └──────┬───────┘
+                           │ embedding
+                           ▼
+                    ┌──────────────┐
+                    │  ChromaDB    │  Per doc-type collection:
+                    │  (vector DB) │  "ma", "dividend"
+                    └──────────────┘
+                           ▲
+                    ┌──────┴───────┐
+                    │   Retriever  │  top-k semantic search
+                    │  (sync)      │  → injected into Extractor prompt
+                    └──────────────┘
+                           │
+                    ┌──────┴───────┐
+                    │  Extractor   │  First-pass only; retries
+                    │  (first-pass)│  do NOT re-query RAG
+                    └──────────────┘
+```
+
+### 10.3 Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **Per doc-type collections** | M&A and Dividend extractions have fundamentally different schemas; searching across types would retrieve irrelevant results. |
+| **Embedding via local SentenceTransformer** | No external API call — embeddings are fast, free, and deterministic. Current model: `all-MiniLM-L6-v2` (384-dim). Future migration path: Amazon Bedrock Titan Embeddings for production scale. |
+| **Write-on-validate** | Vectors are persisted **only after** the Validator passes. Retry / DLQ results are never embedded — avoiding noise in the vector store. |
+| **First-pass only** | RAG context is retrieved once before the initial LLM call. Retry passes (self-correction loop) reuse the same context; re-querying would risk retrieving the (incorrect) first attempt. |
+| **Cold-start graceful degradation** | On first run (empty ChromaDB), the Retriever returns an empty string — the Extractor falls back to zero-shot extraction with no performance penalty. |
+
+### 10.4 Module Map
+
+| File | Responsibility |
+|------|---------------|
+| `src/rag/embedder.py` | `SentenceTransformerEmbedder` — loads model, normalises vectors |
+| `src/rag/chroma_client.py` | Singleton ChromaDB client with `override_chroma_path()` for test/eval isolation |
+| `src/rag/repository.py` | `ChromaRepository` — add/delete/search per doc-type collection |
+| `src/rag/retriever.py` | `Retriever` — top-k semantic search, formats as few-shot context string |
+
+### 10.5 Integration in Extractor Node
+
+```python
+# src/nodes/extractor.py — inside extractor_node()
+rag_context = ""
+if state["retry_count"] == 0:          # first-pass only
+    rag_context = await retriever.retrieve_context(
+        doc_type=state["doc_type"],
+        query=state["raw_content"],
+    )
+
+# Inject into system message
+system_prompt = EXTRACTOR_PROMPTS[doc_type]
+if rag_context:
+    system_prompt += (
+        "\n\n─── SIMILAR PAST EXTRACTIONS (use as reference) ───\n"
+        f"{rag_context}"
+    )
+
+llm_result = await client.generate_structured(
+    system_prompt=system_prompt,
+    user_prompt=...,
+    response_model=llm_model,
+)
+```
+
+### 10.6 Migration Path to Bedrock Titan
+
+Current embedding is purely local (`all-MiniLM-L6-v2` via SentenceTransformer). For production deployment at scale:
+
+1. Replace `src/rag/embedder.py` with an `EmbeddingProvider` abstract base
+2. Implement `BedrockTitanEmbedder` using `boto3` to call `amazon.titan-embed-text-v2`
+3. Configure via `settings.embedding_provider` — no other code changes needed
+
+No schema migration required — ChromaDB stores raw embedding vectors independent of the model that produced them (re-indexing only needed if model dimension changes).
+
+---
+
+## 11. CI Golden Dataset Gate (Phase 3-C)
+
+### 11.1 Motivation
+
+Without a regression safety net, a change to the Extractor prompt, Validator rules, or LLM model can silently degrade extraction quality. The Golden Dataset Gate solves this by running the full pipeline against a **hand-labelled golden dataset** on every CI push/PR.
+
+### 11.2 Directory Structure
+
+```
+golden/
+├── expected_pass/               ← Pipeline must produce ≥85% accuracy
+│   ├── dividend_apple_2026.golden.json
+│   ├── ma_microsoft_activision.golden.json
+│   └── test_ma_pass.golden.json
+│
+└── expected_fail/               ← Pipeline must route to DLQ (fail)
+    └── test_ma_fail_loop.golden.json
+```
+
+### 11.3 Eval Engine — `scripts/evaluate.py`
+
+The evaluator runs each golden file through an **isolated pipeline instance** (temp SQLite + override ChromaDB path) and compares output against the golden JSON using a **6-mode field comparison engine**:
+
+| Mode | Match Rule | Example Fields |
+|------|-----------|----------------|
+| `enum` | Exact string match against allowed values | `payment_method`, `dividend_type`, `currency` |
+| `numeric` | Absolute difference < `abs_tol` (default 0.01) | `total_value_usd`, `dividend_cash_amount` |
+| `bool` | Strict boolean equality | `is_final` |
+| `date` | YYYY-MM-DD string equality | `announcement_date`, `ex_dividend_date` |
+| `text_lower` | Case-insensitive trimmed string match | `acquirer`, `target` |
+| `fuzzy_match` | `difflib.SequenceMatcher` ratio ≥ `threshold` (default 0.85) | Company names with minor variations |
+
+**Per-field overrides** — stored as `_field_eval_overrides` in each golden JSON file — allow fine-tuning comparison behaviour per field without changing the eval engine. Example from `golden/expected_pass/test_ma_pass.golden.json`:
+
+```json
+{
+  "_field_eval_overrides": {
+    "expected_close_date": {
+      "mode": "date_range",
+      "accept_null": true,
+      "range_start": "2026-04-01",
+      "range_end": "2026-06-30"
+    }
+  }
+}
+```
+
+Supported override modes: `date_range`, `fuzzy_match` (with custom `threshold`), `numeric` (with custom `abs_tol`).
+
+### 11.4 Expected-Fail Mode
+
+Documents in `golden/expected_fail/` are known to contain corrupt/insufficient data. The evaluator only checks:
+1. The pipeline sets `exit_reason == "dead_letter_queue"`
+2. The `retry_count` matches the golden expectation
+
+Field-level comparison is skipped entirely.
+
+### 11.5 CI Workflow — `.github/workflows/ci.yml`
+
+```yaml
+jobs:
+  test-and-eval:
+    steps:
+      - name: Unit tests (no LLM calls)
+        run: pytest -m "not integration" --tb=short -q
+
+      - name: Golden dataset evaluation
+        run: python scripts/evaluate.py --threshold 0.85 --json
+        env:
+          PYTHONPATH: "."
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+
+      - name: Lint check (black)
+        run: |
+          pip install -r requirements-dev.txt
+          black --check --diff src/ tests/ scripts/
+```
+
+Three gates, sequential:
+1. **Unit tests** — 135+ tests, zero LLM calls, fast
+2. **Golden evaluation** — full pipeline end-to-end with real LLM, exit code 0/1 gates the build
+3. **Black lint** — format consistency via `requirements-dev.txt` (black==25.11.0)
+
+### 11.6 Idempotency During Eval
+
+Each golden eval run creates a **temporary directory** for SQLite + ChromaDB, isolated via the `override_chroma_path` pattern (same technique used in integration tests). This ensures:
+- No pollution of the development database
+- Parallel-safe execution
+- Clean teardown on exit
+
+---
+
+## 12. Concurrency & Performance
+
+### 12.1 Async I/O Everywhere
 
 | Layer | Mechanism |
 |-------|-----------|
@@ -593,7 +784,7 @@ SYSTEM_PROMPT = """... ONE of:
 | Database | `aiosqlite` (async SQLite) |
 | Batch processing | `asyncio.Semaphore(concurrency)` + `asyncio.gather` |
 
-### 10.2 Batch Pipeline Execution
+### 12.2 Batch Pipeline Execution
 
 ```python
 async def _gather_with_semaphore(file_paths: list[str], concurrency: int = 5):
@@ -611,7 +802,7 @@ Each `run_pipeline()` call independently invokes the full LangGraph state machin
 
 ---
 
-## 11. Appendix — Physical File Map
+## 13. Appendix — Physical File Map
 
 ```
 financial-ai-pipeline/
@@ -626,6 +817,20 @@ financial-ai-pipeline/
 │       ├── test_ma_pass.txt
 │       ├── test_ma_fail_loop.txt
 │       └── dividend_apple_2026.txt
+│
+├── scripts/
+│   └── evaluate.py               ← Golden dataset evaluation runner (Phase 3-C)
+│
+├── golden/
+│   ├── expected_pass/            ← Pipeline must produce ≥85% accuracy
+│   │   ├── dividend_apple_2026.golden.json
+│   │   ├── ma_microsoft_activision.golden.json
+│   │   └── test_ma_pass.golden.json
+│   └── expected_fail/            ← Pipeline must route to DLQ
+│       └── test_ma_fail_loop.golden.json
+│
+├── .github/workflows/
+│   └── ci.yml                    ← CI gates: unit tests → golden eval → lint
 │
 ├── src/
 │   ├── main.py                   ← CLI entry point (argparse)
@@ -648,8 +853,17 @@ financial-ai-pipeline/
 │   │   ├── base.py               ← Metadata + BaseDoc (foundation)
 │   │   └── extraction/
 │   │       ├── __init__.py       ← Public exports
+│   │       ├── base_model.py     ← BaseExtractionModel (shared validators)
 │   │       ├── manda.py          ← M&A two-model contract
-│   │       └── dividend.py       ← Dividend two-model contract
+│   │       ├── dividend.py       ← Dividend two-model contract
+│   │       └── profiles.py       ← Company Profile schema
+│   │
+│   ├── rag/                      ← Phase 2 — RAG-Augmented Extraction
+│   │   ├── __init__.py
+│   │   ├── embedder.py           ← SentenceTransformerEmbedder
+│   │   ├── chroma_client.py      ← Singleton ChromaDB client
+│   │   ├── repository.py         ← ChromaRepository per doc-type collection
+│   │   └── retriever.py          ← top-k semantic search → few-shot context
 │   │
 │   ├── llm/
 │   │   └── client.py             ← LangChain LLM client wrapper
@@ -663,9 +877,25 @@ financial-ai-pipeline/
 ├── output/                       ← JSON dual-write artefacts
 ├── data/                         ← SQLite database
 ├── logs/                         ← Log output
-└── tests/
-    ├── test_graph/
-    └── test_nodes/
+│
+├── tests/
+│   ├── conftest.py               ← Shared fixtures + integration marker
+│   ├── test_graph/
+│   │   └── test_builder.py       ← LangGraph topology tests
+│   └── test_nodes/
+│       ├── test_reader.py
+│       ├── test_schemas.py
+│       ├── test_validator.py
+│       ├── test_storage.py
+│       └── test_rag.py           ← Phase 2 — RAG integration tests
+│
+├── DOCS_SYSTEM_DESIGN.md         ← This document
+├── requirements.txt              ← Python dependencies
+├── requirements-dev.txt          ← Dev dependencies (black==25.11.0)
+├── pyproject.toml                ← Project metadata
+├── pytest.ini                    ← Pytest configuration
+├── .env.example                  ← Environment template
+└── .gitignore
 ```
 
 ---
