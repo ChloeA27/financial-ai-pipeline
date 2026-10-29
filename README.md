@@ -29,7 +29,7 @@ This pipeline combines an LLM extraction step with a deterministic, self-correct
 - **Two-model data isolation**: the LLM only ever fills business fields (`MandaExtraction`, `DividendExtraction`); the pipeline itself owns provenance (`doc_id`, `Metadata`, audit trail) so the model can never corrupt controlled fields
 - **SHA-256 idempotency + SCD Type 2 versioning**: re-running on unchanged content is a no-op; re-running on an edited file archives the old version and inserts a new one — nothing is ever overwritten
 - **RAG-augmented extraction**: validated past extractions are embedded (SentenceTransformer, local) and stored in ChromaDB per document type, then retrieved as few-shot context on first-pass extraction
-- **CI golden-dataset gate**: every push runs the pipeline against hand-labelled golden files with a 6-mode field comparison engine (`enum`, `numeric`, `bool`, `date`, `text_lower`, `fuzzy_match`) and fails the build below an accuracy threshold
+- **CI golden-dataset gate**: every push runs the pipeline against hand-labelled golden files with a field-type-aware comparison engine (`enum`, `numeric` ±1 %, `bool`, `date`, `text_lower`; per-field overrides `date_range`, `fuzzy_match`, `accept_null`) and fails the build below an accuracy threshold
 
 Currently supports two document types (**M&A**, **Dividend**) via a registry pattern — adding a new type requires a new schema file and a few dict entries, no changes to graph topology or node logic.
 
@@ -66,10 +66,10 @@ raw_data/*.txt
       │ (pass/fail)                             │
       ▼                                         │
  ┌──────────┐     ┌──────────────┐              │
- │   PASS   │     │ FAIL (retry  │──────────────┘
- │ (persist)│     │  < max)      │  → Extractor (with feedback)
+ │   PASS   │     │ FAIL, budget │──────────────┘
+ │ (persist)│     │  left        │  → Extractor (with feedback)
  └──────────┘     └──────┬───────┘
-                         │ FAIL (retry ≥ max)
+                         │ FAIL (retry budget spent)
                          ▼
                     ┌──────────┐
                     │   DLQ    │
@@ -77,7 +77,7 @@ raw_data/*.txt
                     └──────────┘
 ```
 
-Each validated result is dual-written to a JSON file (`output/`) and a SQLite database (`data/pipeline.db`, 4 tables: `extractions`, `extraction_sources`, `correction_logs`, `dead_letter_queue`) with SCD Type 2 versioning on the `extractions` table.
+Each validated result is written to a SQLite database (`data/pipeline.db`, 4 tables: `extractions`, `extraction_sources`, `correction_logs`, `dead_letter_queue`) with SCD Type 2 versioning on the `extractions` table. If `--output <dir>` is given, a JSON file per document is also written there (including failed ones).
 
 **See [DOCS_SYSTEM_DESIGN.md](./DOCS_SYSTEM_DESIGN.md) for the full system design white paper**, including the state schema, the two-model isolation protocol, the idempotency guard implementation, RAG integration details, and the CI evaluation engine.
 
@@ -92,11 +92,11 @@ Each validated result is dual-written to a JSON file (`output/`) and a SQLite da
 | **Idempotent Persistence** | SHA-256 hash of raw file content is the true dedup key (not the per-run UUID `doc_id`) — re-running on unchanged content is a guaranteed no-op |
 | **Immutable Version History** | SCD Type 2 (`version` + `is_current` columns) — file edits archive the old row and insert a new version, never overwrite |
 | **Self-Correction Loop** | A conditional LangGraph edge routes failed validations back to the Extractor with the Validator's structured error feedback injected into the next prompt |
-| **Zero-Code Extension** | Adding a document type = 1 new schema file + 3 registry dict entries in `src/nodes/extractor.py` — no changes to graph topology or node logic |
+| **Zero-Code Extension** | Adding a document type = 1 new schema file + 3 registry dict entries in `src/nodes/extractor.py` — no changes to graph topology or node logic (optional extras: validator rules, a RAG collection in `COLLECTION_MAP`, and `FIELD_TYPE_MAP` for the golden eval) |
 | **RAG-Augmented Extraction** | ChromaDB collection per document type; embeddings via local `SentenceTransformer` (`all-MiniLM-L6-v2`); only validated extractions are embedded; superseded versions are de-indexed and a file is never retrieved as its own example; first-pass extraction only (retries reuse the same context) |
 | **Async Concurrency** | `asyncio.Semaphore` + `asyncio.gather` — batch mode runs each file's LangGraph state machine independently and concurrently |
 | **Operation Visibility** | Streamlit dashboard (`src/dashboard.py`) reads `data/pipeline.db` live for KPI cards, a Dead Letter panel, and per-`doc_id` self-correction audit drill-downs |
-| **CI Golden Dataset Gate** | `scripts/evaluate.py` runs the full pipeline against hand-labelled golden JSON files with a 6-mode field comparison engine, gating the build on a configurable accuracy threshold |
+| **CI Golden Dataset Gate** | `scripts/evaluate.py` runs the full pipeline against hand-labelled golden JSON files with a field-type-aware comparison engine, gating the build on a configurable accuracy threshold |
 
 ---
 
@@ -104,7 +104,7 @@ Each validated result is dual-written to a JSON file (`output/`) and a SQLite da
 
 ### Orchestration & LLM
 - **LangGraph** — state machine orchestration (`StateGraph`, conditional edges)
-- **LangChain Core** / **langchain-openai** — LLM client wrapper
+- **OpenAI Python SDK** (`AsyncOpenAI`) — LLM client, pointed at DeepSeek's OpenAI-compatible endpoint
 - **DeepSeek** (OpenAI-compatible API) — extraction + classification model
 
 ### Data Validation
@@ -196,7 +196,7 @@ financial-ai-pipeline/
 ├── raw_data/sample/               ← Sample .txt announcements
 ├── golden/
 │   ├── expected_pass/            ← Golden files pipeline must extract correctly
-│   └── expected_fail/            ← Golden files pipeline must route to DLQ
+│   └── expected_fail/            ← Golden files pipeline must reject
 │
 ├── scripts/
 │   └── evaluate.py                ← Golden dataset evaluation runner
@@ -216,14 +216,15 @@ financial-ai-pipeline/
 │   │   ├── reader.py               ← async file I/O + SHA-256 hashing
 │   │   ├── classifier.py           ← LLM-as-Judge doc type classification
 │   │   ├── extractor.py            ← LLM extraction + registry pattern
-│   │   └── validator.py            ← rule-based quality gate
+│   │   ├── validator.py            ← rule-based quality gate
+│   │   └── retry.py                ← shared retry bookkeeping
 │   │
 │   ├── schemas/
 │   │   ├── base.py                 ← Metadata + BaseDoc
 │   │   └── extraction/             ← per-doc-type two-model contracts
 │   │
 │   ├── rag/                        ← embedder, ChromaDB client, retriever
-│   ├── llm/client.py                ← LangChain LLM client wrapper
+│   ├── llm/client.py                ← OpenAI-SDK LLM client (DeepSeek-compatible)
 │   │
 │   └── storage/
 │       ├── db.py                    ← aiosqlite schema DDL
@@ -231,8 +232,9 @@ financial-ai-pipeline/
 │       └── repository.py            ← SCD Type 2 upsert + idempotency guard
 │
 └── tests/                          ← unit + integration tests
-    ├── test_graph/
-    └── test_nodes/
+    ├── test_graph/  test_cli/  test_eval/  test_nodes/
+    ├── fake_embedding.py           ← offline embedder used by the test suite
+    └── conftest.py                 ← markers + per-test vector-store isolation
 ```
 
 ---
@@ -248,7 +250,7 @@ financial-ai-pipeline/
 ## 🧪 Testing & CI
 
 - **200+ unit tests** across nodes, schemas, storage, graph routing and the RAG layer (`pytest -m "not integration"`, no LLM calls). Each test gets a private vector store and an offline fake embedder; add `and not real_embedder` to skip the few tests that load the real model: `pytest -m "not integration and not real_embedder"`
-- **Golden dataset evaluation** (`scripts/evaluate.py`) runs the full pipeline end-to-end against hand-labelled expected outputs using a 6-mode field comparison engine (`enum`, `numeric`, `bool`, `date`, `text_lower`, `fuzzy_match`), including per-field override rules (e.g. `date_range`, custom `fuzzy_match` thresholds)
+- **Golden dataset evaluation** (`scripts/evaluate.py`) runs the full pipeline end-to-end against hand-labelled expected outputs using a field-type-aware comparison engine (`enum`, `numeric` ±1 %, `bool`, `date`, `text_lower`; per-field overrides `date_range`, `fuzzy_match`, `accept_null`), including per-field override rules (e.g. `date_range`, custom `fuzzy_match` thresholds)
 - **GitHub Actions CI** (`.github/workflows/ci.yml`) runs three sequential gates on every push: unit tests → golden evaluation → `black` lint check. The golden evaluation needs the `DEEPSEEK_API_KEY` secret: it is skipped (with a warning) on fork PRs, but a push without the secret fails the build
 
 ---
