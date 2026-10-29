@@ -95,6 +95,21 @@ async def _process_single(file_path: str, repo: ExtractionRepository) -> dict:
     return final_state
 
 
+def _crashed_state(file_path: str, raw_content: str, exc: BaseException) -> dict:
+    """State for a document whose pipeline raised, so it is routed to the DLQ."""
+    return {
+        "file_path": file_path,
+        "raw_content": raw_content,
+        "doc_type": None,
+        "extracted_data": None,
+        "validation_passed": None,
+        "validation_report": None,
+        "correction_logs": [],
+        "retry_count": 0,
+        "error": f"pipeline raised {type(exc).__name__}: {exc}",
+    }
+
+
 async def _process_batch_concurrent(
     states: list[dict], repo: ExtractionRepository, concurrency: int = 5
 ) -> list[dict]:
@@ -119,22 +134,31 @@ async def _process_batch_concurrent(
 
     elapsed = time.perf_counter() - start
 
-    # Summarise
+    # Summarise + persist
+    raw_by_path = {s["file_path"]: s.get("raw_content", "") for s in states}
     passed = 0
     failed = 0
     for file_path, res in zip(file_paths, results):
         if isinstance(res, Exception):
             logger.error("💥 {} raised exception: {}", Path(file_path).name, res)
             failed += 1
-            continue
-        _summarise_state(Path(file_path).name, res)
-        if isinstance(res, dict) and res.get("validation_passed"):
-            passed += 1
-        elif isinstance(res, dict) and res.get("error"):
-            failed += 1
+            # Don't lose the document: quarantine it so it shows up in the DLQ
+            # (and on the dashboard) instead of only in this run's log.
+            res = _crashed_state(file_path, raw_by_path.get(file_path, ""), res)
+        else:
+            _summarise_state(Path(file_path).name, res)
+            if isinstance(res, dict) and res.get("validation_passed"):
+                passed += 1
+            elif isinstance(res, dict) and res.get("error"):
+                failed += 1
 
         if isinstance(res, dict):
-            await _persist_result(res, repo)
+            try:
+                await _persist_result(res, repo)
+            except Exception as exc:  # one bad write must not abort the batch
+                logger.error(
+                    "💾 {} could not be persisted: {}", Path(file_path).name, exc
+                )
 
     logger.info(
         "🏁 Batch complete: {}/{} passed, {} failed in {:.2f}s",

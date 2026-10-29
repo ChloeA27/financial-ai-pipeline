@@ -362,6 +362,46 @@ class TestRepositoryDLQ:
         finally:
             await conn.close()
 
+    async def test_repeated_failure_of_same_content_is_one_row(
+        self, tmp_db: str, failed_extraction_state: dict[str, Any]
+    ) -> None:
+        """Re-running an unchanged failing file must not pile up DLQ rows."""
+        repo = ExtractionRepository()
+        await repo.save_extraction(failed_extraction_state)
+
+        again = dict(failed_extraction_state)
+        again["error"] = "a different, later error"
+        again["retry_count"] = 2
+        await repo.save_extraction(again)
+
+        conn = await get_connection()
+        try:
+            rows = await conn.execute_fetchall("SELECT * FROM dead_letter_queue")
+        finally:
+            await conn.close()
+        assert len(rows) == 1
+        assert rows[0]["last_error"] == "a different, later error"  # refreshed
+        assert rows[0]["retry_count"] == 2
+
+    async def test_changed_content_or_other_file_gets_its_own_row(
+        self, tmp_db: str, failed_extraction_state: dict[str, Any]
+    ) -> None:
+        repo = ExtractionRepository()
+        await repo.save_extraction(failed_extraction_state)
+
+        edited = dict(failed_extraction_state, raw_content="edited, still broken")
+        await repo.save_extraction(edited)
+
+        other_file = dict(failed_extraction_state, file_path="/tmp/other.txt")
+        await repo.save_extraction(other_file)
+
+        conn = await get_connection()
+        try:
+            rows = await conn.execute_fetchall("SELECT * FROM dead_letter_queue")
+        finally:
+            await conn.close()
+        assert len(rows) == 3
+
     async def test_failed_state_not_in_extractions(
         self, tmp_db: str, failed_extraction_state: dict[str, Any]
     ) -> None:

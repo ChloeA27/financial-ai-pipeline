@@ -184,12 +184,12 @@ def _load_all_golden() -> dict[str, dict]:
 # ── Pipeline execution ───────────────────────────────────────────────
 
 
-def _run_pipeline_for(source_file: str) -> dict:
+def _run_pipeline_for(source_file: str, raw_data_dir: Path = RAW_DATA_DIR) -> dict:
     """
     Run the pipeline on one source file inside a temp directory so eval
     does NOT pollute the development database or vector store.
     """
-    src_path = RAW_DATA_DIR / source_file
+    src_path = Path(raw_data_dir) / source_file
     if not src_path.exists():
         raise FileNotFoundError(f"Source file not found: {src_path}")
 
@@ -372,7 +372,7 @@ def main() -> int:
 
         # Run pipeline
         try:
-            state = _run_pipeline_for(source_file)
+            state = _run_pipeline_for(source_file, raw_data_dir)
         except Exception as e:
             results.append(
                 {
