@@ -1,8 +1,10 @@
 """
 Tests for the RAG module — embedding, ChromaDB persistence, and retrieval.
 
-Each test gets its own tmp_path ChromaDB directory via ``override_chroma_path``,
-ensuring zero cross-test contamination and no writes to the real ``data/chromadb/``.
+Every test gets its own tmp_path ChromaDB directory and an offline fake embedding
+function from the autouse fixture in ``conftest.py`` (zero cross-test contamination,
+no writes to the real ``data/chromadb/``). ``TestEmbedder`` is marked
+``real_embedder`` and uses the actual sentence-transformers model instead.
 """
 
 from __future__ import annotations
@@ -21,28 +23,13 @@ from src.rag.chroma_client import (
     override_chroma_path,
 )
 from src.rag.embedder import get_embedding_function, embed_text
-from src.rag.repository import save_to_vector_store
+from src.rag.repository import delete_from_vector_store, save_to_vector_store
 from src.rag.retriever import retrieve_context
 
 
 # ════════════════════════════════════════════════════════════════
 #  Fixtures
 # ════════════════════════════════════════════════════════════════
-
-
-@pytest.fixture(autouse=True)
-def _chroma_tmp_path(tmp_path: pytest.TempPathFactory) -> None:
-    """
-    Auto-fixture: gives every test its own ChromaDB directory.
-
-    Calls ``override_chroma_path(str(tmp_path))`` before each test, which
-    resets the singleton client so that ``get_chroma_client()`` points to
-    the temporary directory instead of ``settings.chromadb_path``.
-
-    This mirrors the ``tmp_db`` pattern in ``test_storage.py`` for SQLite
-    isolation — no test writes to the real ``data/chromadb/``.
-    """
-    override_chroma_path(str(tmp_path))
 
 
 @pytest.fixture
@@ -101,6 +88,7 @@ def sample_dividend_vector_data() -> dict[str, Any]:
 # ════════════════════════════════════════════════════════════════
 
 
+@pytest.mark.real_embedder
 class TestEmbedder:
     """SentenceTransformer embedding function correctness."""
 
@@ -326,3 +314,101 @@ class TestRagRetriever:
         """
         result = await retrieve_context("Unknown", "test")
         assert result == ""
+
+
+class TestRetrieverSelfExclusion:
+    """A document must not be retrieved as its own few-shot example."""
+
+    @staticmethod
+    def _doc(doc_id: str, path: str, acquirer: str) -> dict[str, Any]:
+        return {
+            "doc_id": doc_id,
+            "acquirer": acquirer,
+            "target": "Target Corp",
+            "metadata": {"doc_type": "M&A", "source_path": path},
+        }
+
+    async def test_same_file_is_excluded(self) -> None:
+        await save_to_vector_store(self._doc("a", "/data/a.txt", "AlphaAcquirer"))
+        await save_to_vector_store(self._doc("b", "/data/b.txt", "BetaAcquirer"))
+
+        ctx = await retrieve_context(
+            "M&A", "acquisition", exclude_file_path="/data/a.txt"
+        )
+        assert "BetaAcquirer" in ctx
+        assert "AlphaAcquirer" not in ctx
+
+    async def test_only_own_file_indexed_returns_empty(self) -> None:
+        await save_to_vector_store(self._doc("a", "/data/a.txt", "AlphaAcquirer"))
+        ctx = await retrieve_context(
+            "M&A", "acquisition", exclude_file_path="/data/a.txt"
+        )
+        assert ctx == ""
+
+    async def test_without_exclusion_everything_is_eligible(self) -> None:
+        await save_to_vector_store(self._doc("a", "/data/a.txt", "AlphaAcquirer"))
+        ctx = await retrieve_context("M&A", "acquisition")
+        assert "AlphaAcquirer" in ctx
+
+    async def test_exclusion_still_fills_top_k_from_other_files(self) -> None:
+        await save_to_vector_store(self._doc("a", "/data/a.txt", "AlphaAcquirer"))
+        for i in range(3):
+            await save_to_vector_store(
+                self._doc(f"o{i}", f"/data/o{i}.txt", f"Other{i}Acquirer")
+            )
+        ctx = await retrieve_context(
+            "M&A", "acquisition", top_k=3, exclude_file_path="/data/a.txt"
+        )
+        assert ctx.count("Reference Extraction") == 3
+        assert "AlphaAcquirer" not in ctx
+
+    async def test_extractor_excludes_its_own_file(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """extractor_node must pass its file_path through to the retriever."""
+        from src.nodes import extractor as extractor_module
+
+        seen: dict[str, Any] = {}
+
+        async def spy(**kwargs: Any) -> str:
+            seen.update(kwargs)
+            return ""
+
+        class _Client:
+            async def generate_structured(self, **_: Any) -> Any:
+                from src.schemas.extraction.manda import MandaExtraction
+
+                return MandaExtraction(acquirer="A", target="B")
+
+            async def close(self) -> None:
+                return None
+
+        monkeypatch.setattr(extractor_module, "retrieve_context", spy)
+        monkeypatch.setattr(extractor_module, "LLMClient", _Client)
+
+        await extractor_module.extractor_node(
+            {
+                "file_path": "/data/a.txt",
+                "raw_content": "some text",
+                "doc_type": "M&A",
+                "correction_logs": [],
+                "retry_count": 0,
+            }
+        )
+        assert seen["exclude_file_path"] == "/data/a.txt"
+
+
+class TestDeleteFromVectorStore:
+    async def test_deletes_only_the_given_doc(
+        self, sample_manda_vector_data: dict[str, Any]
+    ) -> None:
+        await save_to_vector_store(sample_manda_vector_data)
+        await save_to_vector_store({**sample_manda_vector_data, "doc_id": "keep"})
+        await delete_from_vector_store("test-manda-001", "M&A")
+        assert get_or_create_collection("M&A").get()["ids"] == ["keep"]
+
+    async def test_missing_id_or_unknown_type_is_harmless(self) -> None:
+        await delete_from_vector_store("nope", "M&A")
+        await delete_from_vector_store("nope", "Unknown")
+        await delete_from_vector_store("", "M&A")
+        await delete_from_vector_store("x", "")

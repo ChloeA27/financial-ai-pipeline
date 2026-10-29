@@ -6,9 +6,18 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+# A newer push to the same ref supersedes the run in flight.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-and-eval:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -18,11 +27,28 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
+          # Default only hashes requirements.txt; include the dev file too.
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      # sentence-transformers pulls torch, and the default Linux wheel drags in
+      # GBs of CUDA libraries that a CPU-only runner never uses.
+      - name: Install CPU-only PyTorch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      # Both the real_embedder tests and the golden eval load all-MiniLM-L6-v2;
+      # without this cache every run re-downloads it from the Hugging Face Hub.
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-all-MiniLM-L6-v2
 
       - name: Unit tests (no LLM calls)
         run: pytest -m "not integration" --tb=short -q
@@ -30,13 +56,31 @@ jobs:
           # Dummy key so config.py doesn't fail; no real LLM calls in unit tests
           DEEPSEEK_API_KEY: "sk-placeholder-for-ci"
 
+      # Repository secrets are not exposed to pull requests from forks, so the
+      # golden eval cannot run there. Skip it with a visible warning — but on
+      # a push to main a missing key must fail the build, otherwise the quality
+      # gate could be bypassed silently.
+      - name: Check LLM secret availability
+        id: llm
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+        run: |
+          if [ -n "$DEEPSEEK_API_KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            echo "::error::DEEPSEEK_API_KEY secret is not set; the golden dataset gate cannot run on a push."
+            exit 1
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::DEEPSEEK_API_KEY is not available (pull request from a fork?). Golden dataset evaluation was SKIPPED."
+          fi
+
       - name: Golden dataset evaluation
+        if: steps.llm.outputs.available == 'true'
         run: python scripts/evaluate.py --threshold 0.85 --json
         env:
           PYTHONPATH: "."
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
 
       - name: Lint check (black)
-        run: |
-          pip install -r requirements-dev.txt
-          black --check --diff src/ tests/ scripts/
+        run: black --check --diff src/ tests/ scripts/

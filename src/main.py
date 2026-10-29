@@ -95,8 +95,23 @@ async def _process_single(file_path: str, repo: ExtractionRepository) -> dict:
     return final_state
 
 
+def _crashed_state(file_path: str, raw_content: str, exc: BaseException) -> dict:
+    """State for a document whose pipeline raised, so it is routed to the DLQ."""
+    return {
+        "file_path": file_path,
+        "raw_content": raw_content,
+        "doc_type": None,
+        "extracted_data": None,
+        "validation_passed": None,
+        "validation_report": None,
+        "correction_logs": [],
+        "retry_count": 0,
+        "error": f"pipeline raised {type(exc).__name__}: {exc}",
+    }
+
+
 async def _process_batch_concurrent(
-    states: list[dict], repo: ExtractionRepository
+    states: list[dict], repo: ExtractionRepository, concurrency: int = 5
 ) -> list[dict]:
     """
     Process multiple files concurrently using asyncio.gather.
@@ -107,30 +122,43 @@ async def _process_batch_concurrent(
     """
     file_paths: list[str] = [s["file_path"] for s in states if s.get("file_path")]
 
-    logger.info("🚀 Launching {} pipeline(s) concurrently...", len(file_paths))
+    logger.info(
+        "🚀 Launching {} pipeline(s) concurrently (max {} at a time)...",
+        len(file_paths),
+        concurrency,
+    )
     start = time.perf_counter()
 
     # ── The magic: fire all pipelines in parallel ──
-    results = await _gather_with_semaphore(file_paths, concurrency=5)
+    results = await _gather_with_semaphore(file_paths, concurrency=concurrency)
 
     elapsed = time.perf_counter() - start
 
-    # Summarise
+    # Summarise + persist
+    raw_by_path = {s["file_path"]: s.get("raw_content", "") for s in states}
     passed = 0
     failed = 0
     for file_path, res in zip(file_paths, results):
         if isinstance(res, Exception):
             logger.error("💥 {} raised exception: {}", Path(file_path).name, res)
             failed += 1
-            continue
-        _summarise_state(Path(file_path).name, res)
-        if isinstance(res, dict) and res.get("validation_passed"):
-            passed += 1
-        elif isinstance(res, dict) and res.get("error"):
-            failed += 1
+            # Don't lose the document: quarantine it so it shows up in the DLQ
+            # (and on the dashboard) instead of only in this run's log.
+            res = _crashed_state(file_path, raw_by_path.get(file_path, ""), res)
+        else:
+            _summarise_state(Path(file_path).name, res)
+            if isinstance(res, dict) and res.get("validation_passed"):
+                passed += 1
+            elif isinstance(res, dict) and res.get("error"):
+                failed += 1
 
         if isinstance(res, dict):
-            await _persist_result(res, repo)
+            try:
+                await _persist_result(res, repo)
+            except Exception as exc:  # one bad write must not abort the batch
+                logger.error(
+                    "💾 {} could not be persisted: {}", Path(file_path).name, exc
+                )
 
     logger.info(
         "🏁 Batch complete: {}/{} passed, {} failed in {:.2f}s",
@@ -157,6 +185,14 @@ async def _gather_with_semaphore(file_paths: list[str], concurrency: int = 5) ->
 
     tasks = [_bounded_pipeline(fp) for fp in file_paths]
     return await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _positive_int(value: str) -> int:
+    """argparse type: a Semaphore(0) would deadlock the batch, so reject < 1."""
+    n = int(value)
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {n}")
+    return n
 
 
 async def main() -> None:
@@ -194,7 +230,7 @@ async def main() -> None:
     )
     parser.add_argument(
         "--concurrency",
-        type=int,
+        type=_positive_int,
         default=5,
         help="Max concurrent pipeline executions (default: 5).",
     )
@@ -222,7 +258,7 @@ async def main() -> None:
             logger.warning("No .txt files found in '{}'", args.dir)
             return
 
-        await _process_batch_concurrent(states, repo=repo)
+        await _process_batch_concurrent(states, repo=repo, concurrency=args.concurrency)
 
 
 if __name__ == "__main__":

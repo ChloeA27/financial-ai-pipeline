@@ -9,7 +9,12 @@ from typing import Any, Literal
 
 import pytest
 
-from src.graph.builder import _route_after_validation, run_pipeline
+from src.graph.builder import (
+    _route_after_extraction,
+    _route_after_validation,
+    build_pipeline,
+    run_pipeline,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -41,16 +46,33 @@ class TestRouteAfterValidation:
         result = _route_after_validation(state)
         assert result == "extractor"
 
-    def test_failed_exhausted_retries(self) -> None:
-        """If retry_count >= max_retries, route to error."""
+    def test_last_allowed_retry_still_runs(self) -> None:
+        """retry_count counts retries performed; == max means the last one is due."""
         state = {
             "validation_passed": False,
             "retry_count": 3,
             "max_retries": 3,
             "error": None,
         }
-        result = _route_after_validation(state)
-        assert result == "error"
+        assert _route_after_validation(state) == "extractor"
+
+    def test_budget_overrun_without_error_flag_routes_to_error(self) -> None:
+        state = {
+            "validation_passed": False,
+            "retry_count": 4,
+            "max_retries": 3,
+            "error": None,
+        }
+        assert _route_after_validation(state) == "error"
+
+    def test_exhausted_flag_set_by_node_routes_to_error(self) -> None:
+        state = {
+            "validation_passed": False,
+            "retry_count": 3,
+            "max_retries": 3,
+            "error": "validator_node: max retries (3) exhausted.",
+        }
+        assert _route_after_validation(state) == "error"
 
     def test_fatal_error_routes_to_error(self) -> None:
         """Fatal error takes precedence over validation status."""
@@ -107,6 +129,130 @@ class TestRouteAfterValidation:
         }
         result = _route_after_validation(state)
         assert result == "extractor"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Post-extraction router (schema-parse failures skip the Validator)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestRouteAfterExtraction:
+    def test_normal_success_goes_to_validator(self) -> None:
+        state = {"validation_passed": None, "retry_count": 0, "max_retries": 3}
+        assert _route_after_extraction(state) == "validator"
+
+    def test_parse_failure_with_budget_retries_extractor(self) -> None:
+        state = {"validation_passed": False, "retry_count": 1, "max_retries": 3}
+        assert _route_after_extraction(state) == "extractor"
+
+    def test_error_ends(self) -> None:
+        state = {"validation_passed": False, "retry_count": 3, "error": "boom"}
+        assert _route_after_extraction(state) == "__end__"
+
+    def test_budget_overrun_without_error_flag_still_ends(self) -> None:
+        state = {"validation_passed": False, "retry_count": 4, "max_retries": 3}
+        assert _route_after_extraction(state) == "__end__"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Whole graph with a scripted LLM (real parsing, no network)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestGraphSelfCorrection:
+    @pytest.fixture
+    def scripted(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
+        from tests.test_nodes.test_extractor import FakeOpenAI
+        from src.nodes import extractor as extractor_module
+
+        FakeOpenAI.queue = []
+        FakeOpenAI.calls = []
+        monkeypatch.setattr("src.llm.client.AsyncOpenAI", FakeOpenAI)
+
+        async def _no_rag(**_: Any) -> str:
+            return ""
+
+        monkeypatch.setattr(extractor_module, "retrieve_context", _no_rag)
+        src = tmp_path / "ma.txt"
+        src.write_text("Acme to acquire Widgets Inc. for $1B in cash.")
+        return FakeOpenAI, str(src)
+
+    CLASSIFY = '{"doc_type": "M&A", "confidence": 0.9, "reasoning": "deal"}'
+    GOOD = (
+        '{"acquirer": "Acme", "target": "Widgets Inc.", "total_value_usd": 1e9,'
+        ' "payment_method": "Cash"}'
+    )
+    BAD_ENUM = '{"acquirer": "Acme", "target": "W", "payment_method": "cash"}'
+
+    async def test_bad_enum_then_good_recovers(self, scripted) -> None:
+        fake, path = scripted
+        fake.queue = [self.CLASSIFY, self.BAD_ENUM, self.GOOD]
+
+        result = await run_pipeline(path)
+
+        assert result["validation_passed"] is True
+        assert result.get("error") is None
+        assert result["retry_count"] == 1
+        assert len(result["correction_logs"]) == 1
+        assert "payment_method" in result["correction_logs"][0]["error_summary"]
+        assert result["extracted_data"]["acquirer"] == "Acme"
+
+    async def test_always_bad_exhausts_to_dlq_state(self, scripted) -> None:
+        fake, path = scripted
+        fake.queue = [self.CLASSIFY] + [self.BAD_ENUM] * 4
+
+        result = await run_pipeline(path)
+
+        assert result["validation_passed"] is False
+        assert "max retries (3) exhausted" in result["error"]
+        # 1 first attempt + max_retries (3) retries, all failed
+        assert result["retry_count"] == 3
+        assert [l["cycle"] for l in result["correction_logs"]] == [1, 2, 3, 4]
+        assert fake.queue == []  # no extraction attempt beyond the budget
+
+    async def test_parse_failure_then_validator_failure_then_good(
+        self, scripted
+    ) -> None:
+        fake, path = scripted
+        no_acquirer = '{"target": "W", "total_value_usd": 5, "payment_method": "Cash"}'
+        fake.queue = [self.CLASSIFY, self.BAD_ENUM, no_acquirer, self.GOOD]
+
+        result = await run_pipeline(path)
+
+        assert result["validation_passed"] is True
+        assert result["retry_count"] == 2
+        assert [l["cycle"] for l in result["correction_logs"]] == [1, 2]
+
+    async def test_max_retries_zero_means_single_attempt(self, scripted) -> None:
+        fake, path = scripted
+        fake.queue = [self.CLASSIFY, self.BAD_ENUM, self.GOOD]  # GOOD never used
+        from src.nodes.reader import read_single_file
+
+        state = await read_single_file(path)
+        state["max_retries"] = 0
+        result = await build_pipeline().ainvoke(state)
+
+        assert result["validation_passed"] is False
+        assert result["retry_count"] == 0
+        assert len(result["correction_logs"]) == 1
+        assert fake.queue == [self.GOOD]
+
+    async def test_validator_failures_get_full_budget(self, scripted) -> None:
+        """Rule failures (not just parse failures) also get max_retries retries."""
+        fake, path = scripted
+        no_acquirer = '{"target": "W", "total_value_usd": 5, "payment_method": "Cash"}'
+        fake.queue = [self.CLASSIFY] + [no_acquirer] * 4
+
+        result = await run_pipeline(path)
+
+        assert result["validation_passed"] is False
+        assert result["retry_count"] == 3
+        assert len(result["correction_logs"]) == 4
+        assert "validator_node: max retries (3) exhausted" in result["error"]
+        assert fake.queue == []
+
+    def test_graph_compiles(self) -> None:
+        assert build_pipeline() is not None
 
 
 # ═══════════════════════════════════════════════════════════════════

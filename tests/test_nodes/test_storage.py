@@ -224,6 +224,80 @@ class TestRepositoryUpsert:
         finally:
             await conn.close()
 
+    async def test_scd_type2_removes_superseded_vector(
+        self, tmp_db: str, passed_extraction_state: dict[str, Any]
+    ) -> None:
+        """An archived version must stop being served as RAG context."""
+        from src.rag.chroma_client import get_or_create_collection
+
+        repo = ExtractionRepository()
+        await repo.save_extraction(passed_extraction_state)
+        assert get_or_create_collection("M&A").get(ids=["abc123def456"])["ids"] == [
+            "abc123def456"
+        ]
+
+        changed = dict(passed_extraction_state)
+        changed["raw_content"] = "Modified: Microsoft to acquire Activision for $70B."
+        changed["extracted_data"] = {
+            **changed["extracted_data"],
+            "doc_id": "new-doc-id-789",
+        }
+        await repo.save_extraction(changed)
+
+        col = get_or_create_collection("M&A")
+        assert col.get(ids=["abc123def456"])["ids"] == []  # v1 gone from index
+        assert col.get(ids=["new-doc-id-789"])["ids"] == ["new-doc-id-789"]
+        assert col.count() == 1
+
+        # ...but SQLite keeps v1 as history
+        conn = await get_connection()
+        try:
+            rows = await conn.execute_fetchall(
+                "SELECT doc_id, is_current FROM extractions ORDER BY version"
+            )
+            assert [(r["doc_id"], r["is_current"]) for r in rows] == [
+                ("abc123def456", 0),
+                ("new-doc-id-789", 1),
+            ]
+        finally:
+            await conn.close()
+
+    async def test_idempotent_rerun_keeps_vector(
+        self, tmp_db: str, passed_extraction_state: dict[str, Any]
+    ) -> None:
+        from src.rag.chroma_client import get_or_create_collection
+
+        repo = ExtractionRepository()
+        await repo.save_extraction(passed_extraction_state)
+        await repo.save_extraction(passed_extraction_state)
+        assert get_or_create_collection("M&A").count() == 1
+
+    async def test_other_files_vectors_untouched(
+        self, tmp_db: str, passed_extraction_state: dict[str, Any]
+    ) -> None:
+        from src.rag.chroma_client import get_or_create_collection
+
+        repo = ExtractionRepository()
+        await repo.save_extraction(passed_extraction_state)
+
+        other = dict(passed_extraction_state)
+        other["file_path"] = "/tmp/another_deal.txt"
+        other["raw_content"] = "Totally different deal text."
+        other["extracted_data"] = {
+            **other["extracted_data"],
+            "doc_id": "other-doc",
+            "metadata": {
+                **other["extracted_data"]["metadata"],
+                "source_path": "/tmp/another_deal.txt",
+            },
+        }
+        await repo.save_extraction(other)
+
+        assert sorted(get_or_create_collection("M&A").get()["ids"]) == [
+            "abc123def456",
+            "other-doc",
+        ]
+
     async def test_correction_logs_saved(
         self, tmp_db: str, passed_extraction_state: dict[str, Any]
     ) -> None:
@@ -287,6 +361,46 @@ class TestRepositoryDLQ:
             assert "max retries" in dlq_rows[0]["last_error"]
         finally:
             await conn.close()
+
+    async def test_repeated_failure_of_same_content_is_one_row(
+        self, tmp_db: str, failed_extraction_state: dict[str, Any]
+    ) -> None:
+        """Re-running an unchanged failing file must not pile up DLQ rows."""
+        repo = ExtractionRepository()
+        await repo.save_extraction(failed_extraction_state)
+
+        again = dict(failed_extraction_state)
+        again["error"] = "a different, later error"
+        again["retry_count"] = 2
+        await repo.save_extraction(again)
+
+        conn = await get_connection()
+        try:
+            rows = await conn.execute_fetchall("SELECT * FROM dead_letter_queue")
+        finally:
+            await conn.close()
+        assert len(rows) == 1
+        assert rows[0]["last_error"] == "a different, later error"  # refreshed
+        assert rows[0]["retry_count"] == 2
+
+    async def test_changed_content_or_other_file_gets_its_own_row(
+        self, tmp_db: str, failed_extraction_state: dict[str, Any]
+    ) -> None:
+        repo = ExtractionRepository()
+        await repo.save_extraction(failed_extraction_state)
+
+        edited = dict(failed_extraction_state, raw_content="edited, still broken")
+        await repo.save_extraction(edited)
+
+        other_file = dict(failed_extraction_state, file_path="/tmp/other.txt")
+        await repo.save_extraction(other_file)
+
+        conn = await get_connection()
+        try:
+            rows = await conn.execute_fetchall("SELECT * FROM dead_letter_queue")
+        finally:
+            await conn.close()
+        assert len(rows) == 3
 
     async def test_failed_state_not_in_extractions(
         self, tmp_db: str, failed_extraction_state: dict[str, Any]

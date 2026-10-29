@@ -32,6 +32,9 @@ logs/*.log.*
 WORKFLOW_LOG.md
 DOCS_BACKGROUND.md
 
+# Backup files
+*.bak
+
 # Testing
 .coverage
 htmlcov/

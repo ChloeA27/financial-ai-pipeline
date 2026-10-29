@@ -1,0 +1,10 @@
+# ============================================================
+# Financial AI Pipeline — Monitoring dashboard (optional)
+# Only needed for: streamlit run src/dashboard.py
+# ============================================================
+
+# st.plotly_chart / st.dataframe(width="stretch") need Streamlit >= 1.49
+# (verified: 1.49.1 and 1.50.0 render the dashboard, 1.48.1 raises TypeError).
+streamlit>=1.49.1
+plotly>=5.0.0
+pandas>=2.0.0

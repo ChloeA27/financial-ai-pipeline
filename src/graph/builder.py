@@ -56,7 +56,28 @@ from src.nodes.validator import validator_node
 from src.state.pipeline_state import PipelineState
 
 
-# ── Conditional edge: self-correction router ──
+# ── Conditional edges: self-correction routers ──
+
+
+def _route_after_extraction(
+    state: PipelineState,
+) -> Literal["validator", "extractor", "__end__"]:
+    """
+    Decide where to go after the Extractor Node finishes.
+
+    - fatal error (LLM/transport failure, or retries exhausted on schema
+      parse failures)                        → END
+    - ``validation_passed == False``         → the LLM output could not even be
+      parsed into the schema; the Extractor already logged the correction
+      cycle, so skip the Validator and retry (or end) via the shared router.
+    - otherwise                              → Validator
+    """
+    if state.get("error"):
+        return END
+    if state.get("validation_passed") is False:
+        route = _route_after_validation(state)
+        return END if route == "error" else route
+    return "validator"
 
 
 def _route_after_validation(
@@ -66,11 +87,14 @@ def _route_after_validation(
     Decide where to go after the Validator Node finishes.
 
     - validation_passed == True  → END (document is good, output)
-    - validation_passed == False & retry_count < max_retries
+    - validation_passed == False & retry_count <= max_retries
                                 → Extractor Node (self-correction loop)
-    - validation_passed == False & retry_count >= max_retries
-                                → END (flagged as error, exhausted retries)
-    - has fatal error           → END (abort)
+    - has fatal error           → END (abort; this includes "retry budget
+                                  spent", which the failing node flags itself)
+
+    ``retry_count`` is the number of retries already *performed*, so a
+    count equal to ``max_retries`` means the last allowed retry is still
+    about to run; only a count above it is out of budget.
     """
     # Fatal error → abort
     if state.get("error"):
@@ -84,10 +108,10 @@ def _route_after_validation(
     retry_count = state.get("retry_count", 0)
     max_retries = state.get("max_retries", 3)
 
-    if retry_count < max_retries:
+    if retry_count <= max_retries:
         return "extractor"  # One more attempt
 
-    # Exhausted all retries
+    # Defensive: budget overrun without an error flag
     return "error"
 
 
@@ -119,9 +143,19 @@ def build_pipeline() -> StateGraph:
     workflow.set_entry_point("reader")
     workflow.add_edge("reader", "classifier")
     workflow.add_edge("classifier", "extractor")
-    workflow.add_edge("extractor", "validator")
 
-    # 4. Conditional edge: self-correction loop
+    # 4. Conditional edges: self-correction loop
+    #    (a) after extraction: schema-parse failures retry without the Validator
+    workflow.add_conditional_edges(
+        source="extractor",
+        path=_route_after_extraction,
+        path_map={
+            "validator": "validator",
+            "extractor": "extractor",
+            END: END,
+        },
+    )
+    #    (b) after validation: rule failures retry via the Extractor
     workflow.add_conditional_edges(
         source="validator",
         path=_route_after_validation,

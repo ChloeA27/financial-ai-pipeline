@@ -27,6 +27,7 @@ from typing import Any
 
 from src.config import settings
 from src.graph.builder import run_pipeline
+from src.nodes.extractor import EXTRACTOR_MODELS
 from src.rag.chroma_client import override_chroma_path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -183,12 +184,12 @@ def _load_all_golden() -> dict[str, dict]:
 # ── Pipeline execution ───────────────────────────────────────────────
 
 
-def _run_pipeline_for(source_file: str) -> dict:
+def _run_pipeline_for(source_file: str, raw_data_dir: Path = RAW_DATA_DIR) -> dict:
     """
     Run the pipeline on one source file inside a temp directory so eval
     does NOT pollute the development database or vector store.
     """
-    src_path = RAW_DATA_DIR / source_file
+    src_path = Path(raw_data_dir) / source_file
     if not src_path.exists():
         raise FileNotFoundError(f"Source file not found: {src_path}")
 
@@ -264,64 +265,54 @@ def _eval_expected_pass(
     return passed, total, details
 
 
+def _is_legitimate_rejection(state: dict) -> bool:
+    """
+    True when the pipeline *judged* the document and refused it, as opposed
+    to merely crashing.
+
+    Legitimate rejections:
+      - the Validator (or the Extractor's schema-parse loop) marked the
+        document ``validation_passed=False`` after exhausting retries;
+      - the Classifier succeeded and labelled the document with a type the
+        pipeline has no extractor for (e.g. ``Unknown``).
+
+    Anything else carrying an ``error`` (LLM unreachable, bad API key,
+    missing file, ...) is an infrastructure failure and proves nothing
+    about extraction quality, so it must NOT earn credit.
+    """
+    if state.get("validation_passed") is False:
+        return True
+    doc_type = state.get("doc_type")
+    return doc_type is not None and doc_type not in EXTRACTOR_MODELS
+
+
 def _eval_expected_fail(golden: dict, state: dict) -> tuple[int, int, list[dict]]:
     """
     Evaluate one expected_fail case.
-    Only checks validation_passed == false. No field-level comparison.
+
+    Passes only if the pipeline legitimately rejected the document (see
+    ``_is_legitimate_rejection``); an infrastructure error is a FAIL.
     """
-    validation_passed = state.get("validation_passed")
     error = state.get("error")
 
-    if error:
-        # Fatal error means the document failed to process at all — acceptable
-        return (
-            1,
-            1,
-            [
-                {
-                    "check": "validation_passed",
-                    "passed": True,
-                    "detail": f"error: {error}",
-                }
-            ],
-        )
+    if state.get("validation_passed") is True:
+        passed, detail = False, "expected fail but validation passed"
+    elif _is_legitimate_rejection(state):
+        reason = f"error: {error}" if error else "validation_passed=false"
+        if state.get("validation_passed") is not False:
+            reason = (
+                f"classified as '{state.get('doc_type')}' (no extractor) — {reason}"
+            )
+        passed, detail = True, reason
+    elif error:
+        passed, detail = False, f"infrastructure error, not a rejection: {error}"
+    else:
+        passed, detail = False, "validation_passed is None"
 
-    if validation_passed is False:
-        return (
-            1,
-            1,
-            [
-                {
-                    "check": "validation_passed",
-                    "passed": True,
-                    "detail": "validation_passed=false",
-                }
-            ],
-        )
-    if validation_passed is True:
-        return (
-            0,
-            1,
-            [
-                {
-                    "check": "validation_passed",
-                    "passed": False,
-                    "detail": "expected fail but validation passed",
-                }
-            ],
-        )
-
-    # validation_passed is None (pipeline didn't reach validator)
     return (
-        0,
+        1 if passed else 0,
         1,
-        [
-            {
-                "check": "validation_passed",
-                "passed": False,
-                "detail": "validation_passed is None",
-            }
-        ],
+        [{"check": "validation_passed", "passed": passed, "detail": detail}],
     )
 
 
@@ -381,7 +372,7 @@ def main() -> int:
 
         # Run pipeline
         try:
-            state = _run_pipeline_for(source_file)
+            state = _run_pipeline_for(source_file, raw_data_dir)
         except Exception as e:
             results.append(
                 {
