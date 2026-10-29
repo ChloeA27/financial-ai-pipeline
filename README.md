@@ -143,8 +143,9 @@ cd financial-ai-pipeline
 python -m venv .venv
 source .venv/bin/activate
 
-pip install -r requirements.txt        # runtime dependencies
-pip install -r requirements-dev.txt    # dev-only tooling (black), used in CI lint step
+pip install -r requirements.txt            # runtime dependencies
+pip install -r requirements-dev.txt        # pytest + black, used in CI
+pip install -r requirements-dashboard.txt  # optional: Streamlit monitoring dashboard
 
 cp .env.example .env
 # edit .env and set DEEPSEEK_API_KEY
@@ -163,6 +164,8 @@ python -m src.main --dir raw_data/sample --concurrency 5
 ```
 
 ### Launch the monitoring dashboard
+
+Requires the optional dashboard dependencies (`pip install -r requirements-dashboard.txt`).
 
 ```bash
 streamlit run src/dashboard.py

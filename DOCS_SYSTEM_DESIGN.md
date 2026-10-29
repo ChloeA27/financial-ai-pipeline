@@ -754,15 +754,13 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
 
       - name: Lint check (black)
-        run: |
-          pip install -r requirements-dev.txt
-          black --check --diff src/ tests/ scripts/
+        run: black --check --diff src/ tests/ scripts/
 ```
 
 Three gates, sequential:
 1. **Unit tests** — 135+ tests, zero LLM calls, fast
 2. **Golden evaluation** — full pipeline end-to-end with real LLM, exit code 0/1 gates the build
-3. **Black lint** — format consistency via `requirements-dev.txt` (black==25.11.0)
+3. **Black lint** — format consistency, with `black==25.11.0` pinned in `requirements-dev.txt` and installed alongside the test tooling
 
 ### 11.6 Idempotency During Eval
 
@@ -890,10 +888,10 @@ financial-ai-pipeline/
 │       └── test_rag.py           ← Phase 2 — RAG integration tests
 │
 ├── DOCS_SYSTEM_DESIGN.md         ← This document
-├── requirements.txt              ← Python dependencies
-├── requirements-dev.txt          ← Dev dependencies (black==25.11.0)
-├── pyproject.toml                ← Project metadata
-├── pytest.ini                    ← Pytest configuration
+├── requirements.txt              ← Runtime dependencies
+├── requirements-dev.txt          ← Test + lint tooling (pytest, black==25.11.0)
+├── requirements-dashboard.txt    ← Optional: Streamlit dashboard deps
+├── pyproject.toml                ← Pytest configuration
 ├── .env.example                  ← Environment template
 └── .gitignore
 ```
