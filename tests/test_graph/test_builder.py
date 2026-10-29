@@ -9,7 +9,12 @@ from typing import Any, Literal
 
 import pytest
 
-from src.graph.builder import _route_after_validation, run_pipeline
+from src.graph.builder import (
+    _route_after_extraction,
+    _route_after_validation,
+    build_pipeline,
+    run_pipeline,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -107,6 +112,101 @@ class TestRouteAfterValidation:
         }
         result = _route_after_validation(state)
         assert result == "extractor"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Post-extraction router (schema-parse failures skip the Validator)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestRouteAfterExtraction:
+    def test_normal_success_goes_to_validator(self) -> None:
+        state = {"validation_passed": None, "retry_count": 0, "max_retries": 3}
+        assert _route_after_extraction(state) == "validator"
+
+    def test_parse_failure_with_budget_retries_extractor(self) -> None:
+        state = {"validation_passed": False, "retry_count": 1, "max_retries": 3}
+        assert _route_after_extraction(state) == "extractor"
+
+    def test_error_ends(self) -> None:
+        state = {"validation_passed": False, "retry_count": 3, "error": "boom"}
+        assert _route_after_extraction(state) == "__end__"
+
+    def test_exhausted_without_error_flag_still_ends(self) -> None:
+        state = {"validation_passed": False, "retry_count": 3, "max_retries": 3}
+        assert _route_after_extraction(state) == "__end__"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Whole graph with a scripted LLM (real parsing, no network)
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestGraphSelfCorrection:
+    @pytest.fixture
+    def scripted(self, monkeypatch: pytest.MonkeyPatch, tmp_path):
+        from tests.test_nodes.test_extractor import FakeOpenAI
+        from src.nodes import extractor as extractor_module
+
+        FakeOpenAI.queue = []
+        FakeOpenAI.calls = []
+        monkeypatch.setattr("src.llm.client.AsyncOpenAI", FakeOpenAI)
+
+        async def _no_rag(**_: Any) -> str:
+            return ""
+
+        monkeypatch.setattr(extractor_module, "retrieve_context", _no_rag)
+        src = tmp_path / "ma.txt"
+        src.write_text("Acme to acquire Widgets Inc. for $1B in cash.")
+        return FakeOpenAI, str(src)
+
+    CLASSIFY = '{"doc_type": "M&A", "confidence": 0.9, "reasoning": "deal"}'
+    GOOD = (
+        '{"acquirer": "Acme", "target": "Widgets Inc.", "total_value_usd": 1e9,'
+        ' "payment_method": "Cash"}'
+    )
+    BAD_ENUM = '{"acquirer": "Acme", "target": "W", "payment_method": "cash"}'
+
+    async def test_bad_enum_then_good_recovers(self, scripted) -> None:
+        fake, path = scripted
+        fake.queue = [self.CLASSIFY, self.BAD_ENUM, self.GOOD]
+
+        result = await run_pipeline(path)
+
+        assert result["validation_passed"] is True
+        assert result.get("error") is None
+        assert result["retry_count"] == 1
+        assert len(result["correction_logs"]) == 1
+        assert "payment_method" in result["correction_logs"][0]["error_summary"]
+        assert result["extracted_data"]["acquirer"] == "Acme"
+
+    async def test_always_bad_exhausts_to_dlq_state(self, scripted) -> None:
+        fake, path = scripted
+        fake.queue = [self.CLASSIFY] + [self.BAD_ENUM] * 3
+
+        result = await run_pipeline(path)
+
+        assert result["validation_passed"] is False
+        assert "max retries (3) exhausted" in result["error"]
+        assert result["retry_count"] == 3
+        assert len(result["correction_logs"]) == 3
+        assert fake.queue == []  # exactly max_retries extraction attempts
+
+    async def test_parse_failure_then_validator_failure_then_good(
+        self, scripted
+    ) -> None:
+        fake, path = scripted
+        no_acquirer = '{"target": "W", "total_value_usd": 5, "payment_method": "Cash"}'
+        fake.queue = [self.CLASSIFY, self.BAD_ENUM, no_acquirer, self.GOOD]
+
+        result = await run_pipeline(path)
+
+        assert result["validation_passed"] is True
+        assert result["retry_count"] == 2
+        assert [l["cycle"] for l in result["correction_logs"]] == [1, 2]
+
+    def test_graph_compiles(self) -> None:
+        assert build_pipeline() is not None
 
 
 # ═══════════════════════════════════════════════════════════════════

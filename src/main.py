@@ -96,7 +96,7 @@ async def _process_single(file_path: str, repo: ExtractionRepository) -> dict:
 
 
 async def _process_batch_concurrent(
-    states: list[dict], repo: ExtractionRepository
+    states: list[dict], repo: ExtractionRepository, concurrency: int = 5
 ) -> list[dict]:
     """
     Process multiple files concurrently using asyncio.gather.
@@ -107,11 +107,15 @@ async def _process_batch_concurrent(
     """
     file_paths: list[str] = [s["file_path"] for s in states if s.get("file_path")]
 
-    logger.info("🚀 Launching {} pipeline(s) concurrently...", len(file_paths))
+    logger.info(
+        "🚀 Launching {} pipeline(s) concurrently (max {} at a time)...",
+        len(file_paths),
+        concurrency,
+    )
     start = time.perf_counter()
 
     # ── The magic: fire all pipelines in parallel ──
-    results = await _gather_with_semaphore(file_paths, concurrency=5)
+    results = await _gather_with_semaphore(file_paths, concurrency=concurrency)
 
     elapsed = time.perf_counter() - start
 
@@ -159,6 +163,14 @@ async def _gather_with_semaphore(file_paths: list[str], concurrency: int = 5) ->
     return await asyncio.gather(*tasks, return_exceptions=True)
 
 
+def _positive_int(value: str) -> int:
+    """argparse type: a Semaphore(0) would deadlock the batch, so reject < 1."""
+    n = int(value)
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {n}")
+    return n
+
+
 async def main() -> None:
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -194,7 +206,7 @@ async def main() -> None:
     )
     parser.add_argument(
         "--concurrency",
-        type=int,
+        type=_positive_int,
         default=5,
         help="Max concurrent pipeline executions (default: 5).",
     )
@@ -222,7 +234,7 @@ async def main() -> None:
             logger.warning("No .txt files found in '{}'", args.dir)
             return
 
-        await _process_batch_concurrent(states, repo=repo)
+        await _process_batch_concurrent(states, repo=repo, concurrency=args.concurrency)
 
 
 if __name__ == "__main__":

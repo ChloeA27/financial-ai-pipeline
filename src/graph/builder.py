@@ -56,7 +56,28 @@ from src.nodes.validator import validator_node
 from src.state.pipeline_state import PipelineState
 
 
-# ── Conditional edge: self-correction router ──
+# ── Conditional edges: self-correction routers ──
+
+
+def _route_after_extraction(
+    state: PipelineState,
+) -> Literal["validator", "extractor", "__end__"]:
+    """
+    Decide where to go after the Extractor Node finishes.
+
+    - fatal error (LLM/transport failure, or retries exhausted on schema
+      parse failures)                        → END
+    - ``validation_passed == False``         → the LLM output could not even be
+      parsed into the schema; the Extractor already logged the correction
+      cycle, so skip the Validator and retry (or end) via the shared router.
+    - otherwise                              → Validator
+    """
+    if state.get("error"):
+        return END
+    if state.get("validation_passed") is False:
+        route = _route_after_validation(state)
+        return END if route == "error" else route
+    return "validator"
 
 
 def _route_after_validation(
@@ -119,9 +140,19 @@ def build_pipeline() -> StateGraph:
     workflow.set_entry_point("reader")
     workflow.add_edge("reader", "classifier")
     workflow.add_edge("classifier", "extractor")
-    workflow.add_edge("extractor", "validator")
 
-    # 4. Conditional edge: self-correction loop
+    # 4. Conditional edges: self-correction loop
+    #    (a) after extraction: schema-parse failures retry without the Validator
+    workflow.add_conditional_edges(
+        source="extractor",
+        path=_route_after_extraction,
+        path_map={
+            "validator": "validator",
+            "extractor": "extractor",
+            END: END,
+        },
+    )
+    #    (b) after validation: rule failures retry via the Extractor
     workflow.add_conditional_edges(
         source="validator",
         path=_route_after_validation,

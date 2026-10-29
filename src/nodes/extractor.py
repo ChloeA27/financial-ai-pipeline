@@ -24,13 +24,15 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from pydantic import ValidationError
+
 from src.config import settings
 from src.llm.client import LLMClient
 from src.rag.retriever import retrieve_context
 from src.schemas.base import Metadata
 from src.schemas.extraction.dividend import DividendExtraction, DividendExtractionResult
 from src.schemas.extraction.manda import MandaExtraction, MandaExtractionResult
-from src.state.pipeline_state import PipelineState
+from src.state.pipeline_state import CorrectionLog, PipelineState
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -199,14 +201,70 @@ async def extractor_node(state: PipelineState) -> dict:
         )
 
         # ── Step 3: Serialise to dict for state ──
+        # validation_passed is reset so a stale False from a previous
+        # attempt can't make the post-extraction router skip the Validator.
         return {
             "extracted_data": final_result.model_dump(mode="json"),
+            "validation_passed": None,
         }
 
+    except ValidationError as exc:
+        # The LLM answered, but its output broke the schema (bad enum, date
+        # format, out-of-range number, malformed JSON). That is exactly what
+        # the self-correction loop is for, so don't abort — log and retry.
+        return _parse_failure_update(state, exc)
     except Exception as exc:
         return {"error": f"extractor_node: LLM call failed — {exc}"}
     finally:
         await client.close()
+
+
+# ── Schema-parse failure → self-correction ──
+
+
+def _summarise_validation_error(exc: ValidationError) -> str:
+    """Compact, LLM-readable description of what broke the schema."""
+    issues = []
+    for err in exc.errors():
+        loc = ".".join(str(p) for p in err["loc"]) or "<root>"
+        bad = repr(err.get("input"))
+        if len(bad) > 80:
+            bad = bad[:77] + "..."
+        issues.append(f"[SCHEMA] field='{loc}': {err['msg']} (value={bad})")
+    return "; ".join(issues)
+
+
+def _parse_failure_update(state: PipelineState, exc: ValidationError) -> dict:
+    """
+    Build the state update for an LLM output that failed schema parsing.
+
+    Mirrors what the Validator does on a rule failure — bump ``retry_count``,
+    append a ``CorrectionLog`` and flag ``error`` once the budget is spent —
+    so the router treats both kinds of failure identically.
+    """
+    summary = _summarise_validation_error(exc)
+    new_retry = state.get("retry_count", 0) + 1
+    max_retries = state.get("max_retries", 3)
+    report = f"Extraction output failed schema parsing:\n  - {summary}"
+
+    new_log: CorrectionLog = {
+        "cycle": new_retry,
+        "error_summary": summary,
+        "raw_feedback": report,
+    }
+    update: dict = {
+        "extracted_data": None,
+        "validation_passed": False,
+        "validation_report": report,
+        "retry_count": new_retry,
+        "correction_logs": list(state.get("correction_logs", [])) + [new_log],
+    }
+    if new_retry >= max_retries:
+        update["error"] = (
+            f"extractor_node: max retries ({max_retries}) exhausted. "
+            "LLM output never matched the extraction schema."
+        )
+    return update
 
 
 # ── Correction feedback builder ──
