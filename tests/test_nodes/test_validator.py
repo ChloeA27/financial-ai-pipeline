@@ -523,15 +523,28 @@ class TestValidatorNode:
         state = dict(sample_pipeline_state)
         state["extracted_data"] = dict(state["extracted_data"])
         state["extracted_data"]["acquirer"] = ""
-        state["retry_count"] = 2  # current retry before this validation
+        state["retry_count"] = 3  # all 3 allowed retries already performed
         state["max_retries"] = 3
         result = await validator_node(state)
         assert result.get("validation_passed") is False
-        assert result.get("retry_count") == 3
+        assert result.get("retry_count") == 3  # clamped, not 4
         logs = result.get("correction_logs", [])
         assert len(logs) == 1
         assert result.get("error") is not None
         assert "max retries" in (result.get("error") or "").lower()
+
+    async def test_last_allowed_retry_is_not_exhaustion(
+        self, sample_pipeline_state: dict[str, Any]
+    ) -> None:
+        """retry_count == max-1 failing again still earns the final retry."""
+        state = dict(sample_pipeline_state)
+        state["extracted_data"] = dict(state["extracted_data"])
+        state["extracted_data"]["acquirer"] = ""
+        state["retry_count"] = 2
+        state["max_retries"] = 3
+        result = await validator_node(state)
+        assert result.get("retry_count") == 3
+        assert result.get("error") is None
 
     async def test_multiple_validation_errors(
         self, sample_pipeline_state: dict[str, Any]

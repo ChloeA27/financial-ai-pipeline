@@ -110,14 +110,27 @@ class TestSchemaParseFailure:
         assert update["retry_count"] == 1
         assert "error" not in update
 
-    async def test_exhausting_retries_sets_error(self, fake_llm: type[FakeOpenAI]):
+    async def test_last_allowed_retry_is_not_fatal(self, fake_llm: type[FakeOpenAI]):
         fake_llm.queue = [json.dumps({"payment_method": "cash"})]
-        prior = [{"cycle": 1, "error_summary": "x", "raw_feedback": "x"}]
+        prior = [
+            {"cycle": i, "error_summary": "x", "raw_feedback": "x"} for i in (1, 2)
+        ]
         update = await extractor_node(
             _state(retry_count=2, max_retries=3, correction_logs=prior)
         )
         assert update["retry_count"] == 3
-        assert [l["cycle"] for l in update["correction_logs"]] == [1, 3]
+        assert "error" not in update
+
+    async def test_exhausting_retries_sets_error(self, fake_llm: type[FakeOpenAI]):
+        fake_llm.queue = [json.dumps({"payment_method": "cash"})]
+        prior = [
+            {"cycle": i, "error_summary": "x", "raw_feedback": "x"} for i in (1, 2, 3)
+        ]
+        update = await extractor_node(
+            _state(retry_count=3, max_retries=3, correction_logs=prior)
+        )
+        assert update["retry_count"] == 3  # clamped: no 4th retry was performed
+        assert [l["cycle"] for l in update["correction_logs"]] == [1, 2, 3, 4]
         assert "max retries (3) exhausted" in update["error"]
 
     async def test_does_not_mutate_input_logs(self, fake_llm: type[FakeOpenAI]):

@@ -32,7 +32,8 @@ from src.rag.retriever import retrieve_context
 from src.schemas.base import Metadata
 from src.schemas.extraction.dividend import DividendExtraction, DividendExtractionResult
 from src.schemas.extraction.manda import MandaExtraction, MandaExtractionResult
-from src.state.pipeline_state import CorrectionLog, PipelineState
+from src.nodes.retry import register_failure
+from src.state.pipeline_state import PipelineState
 
 
 # ════════════════════════════════════════════════════════════════════════
@@ -161,6 +162,7 @@ async def extractor_node(state: PipelineState) -> dict:
         rag_context = await retrieve_context(
             doc_type=doc_type,
             query_text=raw_content[:1000],
+            exclude_file_path=state.get("file_path") or None,
         )
         if rag_context:
             user_prompt = rag_context + "\n" + user_prompt
@@ -238,32 +240,25 @@ def _parse_failure_update(state: PipelineState, exc: ValidationError) -> dict:
     """
     Build the state update for an LLM output that failed schema parsing.
 
-    Mirrors what the Validator does on a rule failure — bump ``retry_count``,
-    append a ``CorrectionLog`` and flag ``error`` once the budget is spent —
+    Goes through the same ``register_failure`` bookkeeping as the Validator,
     so the router treats both kinds of failure identically.
     """
     summary = _summarise_validation_error(exc)
-    new_retry = state.get("retry_count", 0) + 1
     max_retries = state.get("max_retries", 3)
-    report = f"Extraction output failed schema parsing:\n  - {summary}"
-
-    new_log: CorrectionLog = {
-        "cycle": new_retry,
-        "error_summary": summary,
-        "raw_feedback": report,
-    }
-    update: dict = {
-        "extracted_data": None,
-        "validation_passed": False,
-        "validation_report": report,
-        "retry_count": new_retry,
-        "correction_logs": list(state.get("correction_logs", [])) + [new_log],
-    }
-    if new_retry >= max_retries:
-        update["error"] = (
+    update = register_failure(
+        state,
+        error_summary=summary,
+        report=f"Extraction output failed schema parsing:\n  - {summary}",
+        exhausted_message=(
             f"extractor_node: max retries ({max_retries}) exhausted. "
             "LLM output never matched the extraction schema."
-        )
+        ),
+    )
+    update["extracted_data"] = None
+    update["validation_passed"] = False
+    update["validation_report"] = (
+        f"Extraction output failed schema parsing:\n  - {summary}"
+    )
     return update
 
 

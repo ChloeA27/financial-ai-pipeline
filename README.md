@@ -1,6 +1,6 @@
 # Financial AI Pipeline
 
-![Badge](https://img.shields.io/badge/Python-3.11%2B-blue) ![Badge](https://img.shields.io/badge/LangGraph-StateGraph-orange) ![Badge](https://img.shields.io/badge/LLM-DeepSeek%20(OpenAI--compatible)-green) ![Badge](https://img.shields.io/badge/Tests-150%2B%20passing-brightgreen)
+![Badge](https://img.shields.io/badge/Python-3.11%2B-blue) ![Badge](https://img.shields.io/badge/LangGraph-StateGraph-orange) ![Badge](https://img.shields.io/badge/LLM-DeepSeek%20(OpenAI--compatible)-green) ![Badge](https://img.shields.io/badge/Tests-200%2B%20passing-brightgreen)
 
 > **A self-correcting, multi-agent LLM pipeline that turns unstructured financial announcements (M&A, dividends) into strictly-typed, versioned, fully-traceable JSON — orchestrated as a LangGraph state machine with RAG-augmented extraction and a CI golden-dataset quality gate.**
 
@@ -25,7 +25,7 @@ Financial institutions ingest hundreds of unstructured announcements daily — S
 This pipeline combines an LLM extraction step with a deterministic, self-correcting state machine (LangGraph) to produce structured, versioned, traceable extraction results from raw `.txt` announcements:
 
 - **Reader → Classifier → Extractor → Validator**, each an independent LangGraph node reading/writing a shared `PipelineState`
-- **Self-correction loop**: failed validations route back to the Extractor with structured feedback for a bounded number of retries before the document is quarantined to a Dead Letter Queue
+- **Self-correction loop**: failed validations route back to the Extractor with structured feedback for a bounded number of retries (`max_retries` retries after the first attempt, covering both rule failures and LLM output that doesn't parse into the schema) before the document is quarantined to a Dead Letter Queue
 - **Two-model data isolation**: the LLM only ever fills business fields (`MandaExtraction`, `DividendExtraction`); the pipeline itself owns provenance (`doc_id`, `Metadata`, audit trail) so the model can never corrupt controlled fields
 - **SHA-256 idempotency + SCD Type 2 versioning**: re-running on unchanged content is a no-op; re-running on an edited file archives the old version and inserts a new one — nothing is ever overwritten
 - **RAG-augmented extraction**: validated past extractions are embedded (SentenceTransformer, local) and stored in ChromaDB per document type, then retrieved as few-shot context on first-pass extraction
@@ -93,7 +93,7 @@ Each validated result is dual-written to a JSON file (`output/`) and a SQLite da
 | **Immutable Version History** | SCD Type 2 (`version` + `is_current` columns) — file edits archive the old row and insert a new version, never overwrite |
 | **Self-Correction Loop** | A conditional LangGraph edge routes failed validations back to the Extractor with the Validator's structured error feedback injected into the next prompt |
 | **Zero-Code Extension** | Adding a document type = 1 new schema file + 3 registry dict entries in `src/nodes/extractor.py` — no changes to graph topology or node logic |
-| **RAG-Augmented Extraction** | ChromaDB collection per document type; embeddings via local `SentenceTransformer` (`all-MiniLM-L6-v2`); only validated extractions are embedded; first-pass extraction only (retries reuse the same context) |
+| **RAG-Augmented Extraction** | ChromaDB collection per document type; embeddings via local `SentenceTransformer` (`all-MiniLM-L6-v2`); only validated extractions are embedded; superseded versions are de-indexed and a file is never retrieved as its own example; first-pass extraction only (retries reuse the same context) |
 | **Async Concurrency** | `asyncio.Semaphore` + `asyncio.gather` — batch mode runs each file's LangGraph state machine independently and concurrently |
 | **Operation Visibility** | Streamlit dashboard (`src/dashboard.py`) reads `data/pipeline.db` live for KPI cards, a Dead Letter panel, and per-`doc_id` self-correction audit drill-downs |
 | **CI Golden Dataset Gate** | `scripts/evaluate.py` runs the full pipeline against hand-labelled golden JSON files with a 6-mode field comparison engine, gating the build on a configurable accuracy threshold |
@@ -247,9 +247,9 @@ financial-ai-pipeline/
 
 ## 🧪 Testing & CI
 
-- **150+ unit tests** across nodes, schemas, storage, and the RAG layer (`pytest -m "not integration"`, no LLM calls)
+- **200+ unit tests** across nodes, schemas, storage, graph routing and the RAG layer (`pytest -m "not integration"`, no LLM calls). Each test gets a private vector store and an offline fake embedder; add `and not real_embedder` to skip the few tests that load the real model: `pytest -m "not integration and not real_embedder"`
 - **Golden dataset evaluation** (`scripts/evaluate.py`) runs the full pipeline end-to-end against hand-labelled expected outputs using a 6-mode field comparison engine (`enum`, `numeric`, `bool`, `date`, `text_lower`, `fuzzy_match`), including per-field override rules (e.g. `date_range`, custom `fuzzy_match` thresholds)
-- **GitHub Actions CI** (`.github/workflows/ci.yml`) runs three sequential gates on every push: unit tests → golden evaluation → `black` lint check
+- **GitHub Actions CI** (`.github/workflows/ci.yml`) runs three sequential gates on every push: unit tests → golden evaluation → `black` lint check. The golden evaluation needs the `DEEPSEEK_API_KEY` secret: it is skipped (with a warning) on fork PRs, but a push without the secret fails the build
 
 ---
 

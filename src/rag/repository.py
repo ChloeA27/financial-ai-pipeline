@@ -97,3 +97,28 @@ async def save_to_vector_store(extracted_data: dict[str, Any]) -> None:
     except Exception as exc:
         # Non-fatal — vector store failure should not crash pipeline
         logger.error("⚠️  save_to_vector_store failed for doc_id={}: {}", doc_id, exc)
+
+
+async def delete_from_vector_store(doc_id: str, doc_type: str) -> None:
+    """
+    Remove a superseded extraction from the per-doc-type collection.
+
+    Called when SCD Type 2 archives a version: the archived row stays in
+    SQLite as history, but it must stop being served to the LLM as a
+    "previously validated" reference.
+    """
+    if not doc_id or not doc_type:
+        return
+    try:
+        collection = get_or_create_collection(doc_type)
+        collection.delete(ids=[doc_id])
+        logger.info(
+            "🧹  [Vector Store] removed superseded doc_id={} from '{}'",
+            doc_id,
+            collection.name,
+        )
+    except Exception as exc:
+        # Non-fatal — a leftover vector is stale context, not a data-loss bug
+        logger.error(
+            "⚠️  delete_from_vector_store failed for doc_id={}: {}", doc_id, exc
+        )

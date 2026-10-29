@@ -20,7 +20,7 @@ from typing import Any
 
 from loguru import logger
 
-from src.rag.repository import save_to_vector_store
+from src.rag.repository import delete_from_vector_store, save_to_vector_store
 from src.storage.db import get_connection
 from src.storage.json_writer import write_json_output
 
@@ -91,6 +91,8 @@ class ExtractionRepository:
           2. If no row with this hash exists BUT another current row for
              the same ``file_path`` has a different hash → archive the old
              row (``is_current = 0``) and insert a new row with version + 1.
+             The archived version is also dropped from the vector store, so
+             outdated extractions are never retrieved as RAG context.
           3. Otherwise → insert version 1 fresh.
         """
         extracted = final_state.get("extracted_data") or {}
@@ -128,13 +130,15 @@ class ExtractionRepository:
             #  SCD Type 2 — check by file_path for versioning
             # ══════════════════════════════════════════════════════
             existing = await conn.execute_fetchall(
-                "SELECT id, version, source_hash FROM extractions "
+                "SELECT id, version, source_hash, doc_id, doc_type FROM extractions "
                 "WHERE file_path = ? AND is_current = 1",
                 (file_path,),
             )
 
+            superseded: tuple[str, str] | None = None
             if existing:
                 row = existing[0]
+                superseded = (row["doc_id"], row["doc_type"])
                 # Hash is guaranteed to be different since we already
                 # checked hash_matches above → archive old, insert new
                 new_version = row["version"] + 1
@@ -213,6 +217,8 @@ class ExtractionRepository:
 
             # ── Write validated extraction to vector store (RAG) ──
             await save_to_vector_store(extracted)
+            if superseded is not None and superseded[0] != doc_id:
+                await delete_from_vector_store(*superseded)
 
         finally:
             await conn.close()

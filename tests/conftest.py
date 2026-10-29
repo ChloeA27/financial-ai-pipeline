@@ -13,9 +13,49 @@ def pytest_configure(config: pytest.Config) -> None:
     """Register custom markers to avoid 'unknown marker' warnings."""
     config.addinivalue_line(
         "markers",
+        "real_embedder: test that loads the real sentence-transformers model "
+        "(needs network on first run). Deselect for a fully offline run: "
+        "pytest -m 'not integration and not real_embedder'.",
+    )
+    config.addinivalue_line(
+        "markers",
         "integration: test that requires real LLM API calls or external services. "
         "Skipped in CI by default (run: pytest -m 'not integration').",
     )
+
+
+# ════════════════════════════════════════════════════════════════
+#  Vector-store isolation (applies to EVERY test)
+# ════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture(autouse=True)
+def _isolated_vector_store(
+    request: pytest.FixtureRequest,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Any:
+    """
+    Keep every test away from the real ``data/chromadb`` and off the network.
+
+    Anything that reaches ChromaDB — directly, or indirectly through
+    ``ExtractionRepository`` -> ``save_to_vector_store`` — gets a private
+    per-test directory and a deterministic offline embedding function.
+    Tests marked ``real_embedder`` keep the real model (still on a private
+    directory). The override is cleared afterwards so nothing leaks between
+    tests, whatever order they run in.
+    """
+    from src.rag import chroma_client
+
+    if request.node.get_closest_marker("real_embedder") is None:
+        from tests.fake_embedding import HashingEmbeddingFunction
+
+        fake = HashingEmbeddingFunction()
+        monkeypatch.setattr(chroma_client, "get_embedding_function", lambda: fake)
+
+    chroma_client.override_chroma_path(str(tmp_path / "chromadb"))
+    yield
+    chroma_client.override_chroma_path(None)
 
 
 # ════════════════════════════════════════════════════════════════

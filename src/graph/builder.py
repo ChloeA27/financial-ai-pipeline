@@ -87,11 +87,14 @@ def _route_after_validation(
     Decide where to go after the Validator Node finishes.
 
     - validation_passed == True  → END (document is good, output)
-    - validation_passed == False & retry_count < max_retries
+    - validation_passed == False & retry_count <= max_retries
                                 → Extractor Node (self-correction loop)
-    - validation_passed == False & retry_count >= max_retries
-                                → END (flagged as error, exhausted retries)
-    - has fatal error           → END (abort)
+    - has fatal error           → END (abort; this includes "retry budget
+                                  spent", which the failing node flags itself)
+
+    ``retry_count`` is the number of retries already *performed*, so a
+    count equal to ``max_retries`` means the last allowed retry is still
+    about to run; only a count above it is out of budget.
     """
     # Fatal error → abort
     if state.get("error"):
@@ -105,10 +108,10 @@ def _route_after_validation(
     retry_count = state.get("retry_count", 0)
     max_retries = state.get("max_retries", 3)
 
-    if retry_count < max_retries:
+    if retry_count <= max_retries:
         return "extractor"  # One more attempt
 
-    # Exhausted all retries
+    # Defensive: budget overrun without an error flag
     return "error"
 
 

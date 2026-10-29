@@ -53,6 +53,7 @@ async def retrieve_context(
     doc_type: str,
     query_text: str,
     top_k: int | None = None,
+    exclude_file_path: str | None = None,
 ) -> str:
     """
     Retrieve semantically similar extractions as few-shot context.
@@ -61,6 +62,10 @@ async def retrieve_context(
         doc_type: Document type to search within (e.g. ``"M&A"``, ``"Dividend"``).
         query_text: The raw text of the current document to find similar examples.
         top_k: Number of results to return (default: ``settings.rag_top_k``).
+        exclude_file_path: Skip extractions that came from this source file.
+            A document must not be its own few-shot example: on a re-run the
+            index still holds the file's previous (possibly outdated, since
+            the file may have been edited) extraction.
 
     Returns:
         A formatted string of reference extractions, or empty string if
@@ -87,12 +92,14 @@ async def retrieve_context(
     # ── Query ChromaDB (async via thread pool — ChromaDB is sync) ──
     try:
         collection = get_or_create_collection(doc_type)
+        where = {"file_path": {"$ne": exclude_file_path}} if exclude_file_path else None
         loop = asyncio.get_running_loop()
         results = await loop.run_in_executor(
             None,
             lambda: collection.query(
                 query_texts=[query_text[:1000]],
                 n_results=min(top_k, count),
+                where=where,
             ),
         )
     except Exception as exc:

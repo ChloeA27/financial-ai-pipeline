@@ -18,7 +18,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.state.pipeline_state import PipelineState, CorrectionLog
+from src.nodes.retry import register_failure
+from src.state.pipeline_state import PipelineState
 
 
 # ====================================================================
@@ -509,26 +510,18 @@ async def validator_node(state: PipelineState) -> dict:
     }
 
     if not new_validation_passed:
-        # ── Self-correction: increment retry count and log ──
-        current_retry = state.get("retry_count", 0)
-        new_retry = current_retry + 1
-
-        new_log: CorrectionLog = {
-            "cycle": new_retry,
-            "error_summary": "; ".join(errors),
-            "raw_feedback": report,
-        }
-
-        existing_logs: list[CorrectionLog] = state.get("correction_logs", [])
-        updates["retry_count"] = new_retry
-        updates["correction_logs"] = existing_logs + [new_log]
-
-        # ── Check if we've exhausted retries ──
+        # ── Self-correction: log the failure, spend one retry (or give up) ──
         max_retries = state.get("max_retries", 3)
-        if new_retry >= max_retries:
-            updates["error"] = (
-                f"validator_node: max retries ({max_retries}) exhausted. "
-                f"Document failed all correction cycles."
+        updates.update(
+            register_failure(
+                state,
+                error_summary="; ".join(errors),
+                report=report,
+                exhausted_message=(
+                    f"validator_node: max retries ({max_retries}) exhausted. "
+                    f"Document failed all correction cycles."
+                ),
             )
+        )
 
     return updates

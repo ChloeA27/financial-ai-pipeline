@@ -46,16 +46,33 @@ class TestRouteAfterValidation:
         result = _route_after_validation(state)
         assert result == "extractor"
 
-    def test_failed_exhausted_retries(self) -> None:
-        """If retry_count >= max_retries, route to error."""
+    def test_last_allowed_retry_still_runs(self) -> None:
+        """retry_count counts retries performed; == max means the last one is due."""
         state = {
             "validation_passed": False,
             "retry_count": 3,
             "max_retries": 3,
             "error": None,
         }
-        result = _route_after_validation(state)
-        assert result == "error"
+        assert _route_after_validation(state) == "extractor"
+
+    def test_budget_overrun_without_error_flag_routes_to_error(self) -> None:
+        state = {
+            "validation_passed": False,
+            "retry_count": 4,
+            "max_retries": 3,
+            "error": None,
+        }
+        assert _route_after_validation(state) == "error"
+
+    def test_exhausted_flag_set_by_node_routes_to_error(self) -> None:
+        state = {
+            "validation_passed": False,
+            "retry_count": 3,
+            "max_retries": 3,
+            "error": "validator_node: max retries (3) exhausted.",
+        }
+        assert _route_after_validation(state) == "error"
 
     def test_fatal_error_routes_to_error(self) -> None:
         """Fatal error takes precedence over validation status."""
@@ -132,8 +149,8 @@ class TestRouteAfterExtraction:
         state = {"validation_passed": False, "retry_count": 3, "error": "boom"}
         assert _route_after_extraction(state) == "__end__"
 
-    def test_exhausted_without_error_flag_still_ends(self) -> None:
-        state = {"validation_passed": False, "retry_count": 3, "max_retries": 3}
+    def test_budget_overrun_without_error_flag_still_ends(self) -> None:
+        state = {"validation_passed": False, "retry_count": 4, "max_retries": 3}
         assert _route_after_extraction(state) == "__end__"
 
 
@@ -182,15 +199,16 @@ class TestGraphSelfCorrection:
 
     async def test_always_bad_exhausts_to_dlq_state(self, scripted) -> None:
         fake, path = scripted
-        fake.queue = [self.CLASSIFY] + [self.BAD_ENUM] * 3
+        fake.queue = [self.CLASSIFY] + [self.BAD_ENUM] * 4
 
         result = await run_pipeline(path)
 
         assert result["validation_passed"] is False
         assert "max retries (3) exhausted" in result["error"]
+        # 1 first attempt + max_retries (3) retries, all failed
         assert result["retry_count"] == 3
-        assert len(result["correction_logs"]) == 3
-        assert fake.queue == []  # exactly max_retries extraction attempts
+        assert [l["cycle"] for l in result["correction_logs"]] == [1, 2, 3, 4]
+        assert fake.queue == []  # no extraction attempt beyond the budget
 
     async def test_parse_failure_then_validator_failure_then_good(
         self, scripted
@@ -204,6 +222,34 @@ class TestGraphSelfCorrection:
         assert result["validation_passed"] is True
         assert result["retry_count"] == 2
         assert [l["cycle"] for l in result["correction_logs"]] == [1, 2]
+
+    async def test_max_retries_zero_means_single_attempt(self, scripted) -> None:
+        fake, path = scripted
+        fake.queue = [self.CLASSIFY, self.BAD_ENUM, self.GOOD]  # GOOD never used
+        from src.nodes.reader import read_single_file
+
+        state = await read_single_file(path)
+        state["max_retries"] = 0
+        result = await build_pipeline().ainvoke(state)
+
+        assert result["validation_passed"] is False
+        assert result["retry_count"] == 0
+        assert len(result["correction_logs"]) == 1
+        assert fake.queue == [self.GOOD]
+
+    async def test_validator_failures_get_full_budget(self, scripted) -> None:
+        """Rule failures (not just parse failures) also get max_retries retries."""
+        fake, path = scripted
+        no_acquirer = '{"target": "W", "total_value_usd": 5, "payment_method": "Cash"}'
+        fake.queue = [self.CLASSIFY] + [no_acquirer] * 4
+
+        result = await run_pipeline(path)
+
+        assert result["validation_passed"] is False
+        assert result["retry_count"] == 3
+        assert len(result["correction_logs"]) == 4
+        assert "validator_node: max retries (3) exhausted" in result["error"]
+        assert fake.queue == []
 
     def test_graph_compiles(self) -> None:
         assert build_pipeline() is not None

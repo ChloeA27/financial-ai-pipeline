@@ -194,8 +194,8 @@ Defined as a `TypedDict` in `src/state/pipeline_state.py`:
 | `validation_passed` | Validator | `Optional[bool]` | Quality gate pass/fail |
 | `validation_report` | Validator | `Optional[str]` | Detailed validation verdict |
 | `correction_logs` | Validator | `list[CorrectionLog]` | Chronological self-correction history |
-| `retry_count` | Validator | `int` | Current retry attempt number |
-| `max_retries` | Validator | `int` | Maximum allowed retries (configurable, default 3) |
+| `retry_count` | Validator / Extractor | `int` | Retries actually performed (0 on the first pass) |
+| `max_retries` | Reader | `int` | Retry budget (configurable, default 3): a document gets `max_retries + 1` extraction attempts in total |
 | `error` | Any node | `Optional[str]` | Fatal error message |
 
 > **Note:** RAG context is retrieved inside the Extractor Node — it is **not** stored in `PipelineState`. The Extractor calls `await retriever.retrieve_context(doc_type, raw_content)` before the first LLM prompt, injects results into the system message, and discards them after generation. This keeps the state schema lean and avoids serialising embedding vectors through the graph.
@@ -208,8 +208,12 @@ def _route_after_validation(state: PipelineState) -> Literal["extractor", "__end
 
 Three exit paths:
 - **`__end__`** — `validation_passed == True`: document is clean, proceed to persistence
-- **`extractor`** — `validation_passed == False` & `retry_count < max_retries`: send back with feedback for re-extraction
-- **`error`** — `validation_passed == False` & `retry_count >= max_retries` OR fatal error: abort, route to DLQ
+- **`extractor`** — `validation_passed == False` & `retry_count <= max_retries`: send back with feedback for re-extraction
+- **`error`** — fatal error, or the retry budget is spent: abort, route to DLQ
+
+`retry_count` is the number of retries already *performed*, so with `max_retries = 3` a document is extracted at most four times (first attempt + 3 retries). The node that records the last allowed failure (`src/nodes/retry.py::register_failure`) leaves `retry_count` at `max_retries` and sets `error`, which is what sends the document to the DLQ. The router's own `retry_count > max_retries` check is only a defensive backstop.
+
+A second conditional edge sits **after the Extractor**: if the LLM's output does not even parse into the schema (bad enum, malformed date, out-of-range number, invalid JSON), the Extractor logs a correction cycle itself and the router sends it straight back for another attempt, skipping the Validator. Transport / API failures remain fatal.
 
 ---
 
@@ -418,13 +422,13 @@ Validator Node
       │
       └── validation_passed == False
                 │
-                ├── retry_count < max_retries
+                ├── retry_count <= max_retries
                 │       │
                 │       └──→ Extractor Node (with structured feedback)
                 │               │
                 │               └──→ Validator Node (re-evaluate)
                 │
-                └── retry_count >= max_retries → END (DLQ)
+                └── retry budget spent (error flag set) → END (DLQ)
 ```
 
 ### 7.2 Correction Feedback
@@ -442,7 +446,7 @@ This ensures the LLM is aware of its previous mistakes and can correct them with
 
 ### 7.3 Exhaustion → Dead Letter Queue
 
-When `retry_count >= max_retries` (default: 3), the document is routed to `dead_letter_queue` via Branch B of the repository:
+When the retry budget is spent (`max_retries` retries performed, default 3, and the last attempt still failed), the document is routed to `dead_letter_queue` via Branch B of the repository:
 
 ```python
 async def _insert_dead_letter(self, final_state: dict) -> None:
@@ -632,6 +636,8 @@ Cold-start LLM extraction — where the model sees only the system prompt and ra
 | **Embedding via local SentenceTransformer** | No external API call — embeddings are fast, free, and deterministic. Current model: `all-MiniLM-L6-v2` (384-dim). Future migration path: Amazon Bedrock Titan Embeddings for production scale. |
 | **Write-on-validate** | Vectors are persisted **only after** the Validator passes. Retry / DLQ results are never embedded — avoiding noise in the vector store. |
 | **First-pass only** | RAG context is retrieved once before the initial LLM call. Retry passes (self-correction loop) reuse the same context; re-querying would risk retrieving the (incorrect) first attempt. |
+| **Never its own example** | The retriever skips extractions whose source file is the one currently being processed (`exclude_file_path`). Otherwise a re-run — especially after the file was edited — would feed the file's previous, possibly outdated extraction back to the LLM as a "validated reference". |
+| **Superseded versions are de-indexed** | When SCD Type 2 archives a version, its vector is deleted from the collection. The archived row stays in SQLite as history but is never served as RAG context. |
 | **Cold-start graceful degradation** | On first run (empty ChromaDB), the Retriever returns an empty string — the Extractor falls back to zero-shot extraction with no performance penalty. |
 
 ### 10.4 Module Map
@@ -732,9 +738,11 @@ Supported override modes: `date_range`, `fuzzy_match` (with custom `threshold`),
 
 ### 11.4 Expected-Fail Mode
 
-Documents in `golden/expected_fail/` are known to contain corrupt/insufficient data. The evaluator only checks:
-1. The pipeline sets `exit_reason == "dead_letter_queue"`
-2. The `retry_count` matches the golden expectation
+Documents in `golden/expected_fail/` are known to contain corrupt/insufficient data. The evaluator only checks that the pipeline **legitimately rejected** the document:
+1. `validation_passed == False` (retries exhausted), or
+2. the Classifier succeeded but returned a type with no registered extractor (e.g. `Unknown`).
+
+An infrastructure error (LLM unreachable, bad API key, unreadable file) scores **0** — it proves nothing about extraction quality.
 
 Field-level comparison is skipped entirely.
 
@@ -744,23 +752,24 @@ Field-level comparison is skipped entirely.
 jobs:
   test-and-eval:
     steps:
+      - name: Install CPU-only PyTorch        # avoids GBs of unused CUDA libs
+      - name: Cache embedding model           # ~/.cache/huggingface
       - name: Unit tests (no LLM calls)
         run: pytest -m "not integration" --tb=short -q
-
+      - name: Check LLM secret availability   # see below
       - name: Golden dataset evaluation
+        if: steps.llm.outputs.available == 'true'
         run: python scripts/evaluate.py --threshold 0.85 --json
-        env:
-          PYTHONPATH: "."
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-
       - name: Lint check (black)
         run: black --check --diff src/ tests/ scripts/
 ```
 
 Three gates, sequential:
-1. **Unit tests** — 135+ tests, zero LLM calls, fast
+1. **Unit tests** — 200+ tests, zero LLM calls. Every test runs against a private ChromaDB directory and an offline fake embedding function (`tests/conftest.py`), so nothing touches `data/chromadb` and nothing needs the network — except tests marked `real_embedder`, which load the actual sentence-transformers model. For a fully offline run: `pytest -m "not integration and not real_embedder"`.
 2. **Golden evaluation** — full pipeline end-to-end with real LLM, exit code 0/1 gates the build
 3. **Black lint** — format consistency, with `black==25.11.0` pinned in `requirements-dev.txt` and installed alongside the test tooling
+
+**Secrets and forks.** Repository secrets are not exposed to pull requests from forks. On a pull request without `DEEPSEEK_API_KEY` the golden evaluation is skipped with a visible warning; on a **push** (to `main`) a missing key fails the build, so the quality gate cannot be bypassed silently.
 
 ### 11.6 Idempotency During Eval
 
