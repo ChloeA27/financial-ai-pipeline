@@ -1,0 +1,2 @@
+case_id,group,variant,rep,verified,ambiguous,gold_projected,expected,multi,predicted,correct,coverage,classify_attempts,first_quote_pass,tokens,latency_ms,run_id,error_code
+E1-009,typical,head,1,True,False,dividend,dividend,False,dividend,True,True,1,True,1848,2605,9df26681ac264ad08c7f98f68f371b31,

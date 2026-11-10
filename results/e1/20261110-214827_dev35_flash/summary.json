@@ -1,0 +1,215 @@
+{
+  "calls_used": 233,
+  "stopped_early": false,
+  "wall_seconds": 172.0,
+  "variants": {
+    "head": {
+      "n_runs": 70,
+      "n_scored_verified": 34,
+      "accuracy_verified": 0.9706,
+      "per_label": {
+        "mna": {
+          "precision": 1.0,
+          "recall": 0.9167,
+          "support": 12
+        },
+        "dividend": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 4
+        }
+      },
+      "none_specificity": 1.0,
+      "by_group": {
+        "confuser": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "format": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "long": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "multi": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "negative": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "typical": {
+          "n_scored": 34,
+          "accuracy": 0.9706
+        }
+      },
+      "unclear_rate_non_ambiguous": 0.0,
+      "classify_failed_rate": 0.0286,
+      "failed_by_code": {
+        "CLASSIFICATION_PARSE_FAILED": 2
+      },
+      "first_attempt_quote_pass_rate": 1.0,
+      "classify_retry_rate": 0.1,
+      "input_coverage_verified": 0.875,
+      "input_coverage_n": 16,
+      "errors": 0,
+      "tokens_per_doc_mean": 2319.0,
+      "tokens_total": 162328,
+      "latency_ms_per_doc_mean": 2989,
+      "confusion_verified": {
+        "dividend -> dividend": 4,
+        "mna -> failed:CLASSIFICATION_PARSE_FAILED": 1,
+        "mna -> mna": 11,
+        "none -> none": 18
+      },
+      "rep_agreement": 0.9429
+    },
+    "structured": {
+      "n_runs": 70,
+      "n_scored_verified": 34,
+      "accuracy_verified": 1.0,
+      "per_label": {
+        "mna": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 12
+        },
+        "dividend": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 4
+        }
+      },
+      "none_specificity": 1.0,
+      "by_group": {
+        "confuser": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "format": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "long": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "multi": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "negative": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "typical": {
+          "n_scored": 34,
+          "accuracy": 1.0
+        }
+      },
+      "unclear_rate_non_ambiguous": 0.0,
+      "classify_failed_rate": 0.0,
+      "failed_by_code": {},
+      "first_attempt_quote_pass_rate": 1.0,
+      "classify_retry_rate": 0.0429,
+      "input_coverage_verified": 1.0,
+      "input_coverage_n": 16,
+      "errors": 0,
+      "tokens_per_doc_mean": 2933.8,
+      "tokens_total": 205367,
+      "latency_ms_per_doc_mean": 2257,
+      "confusion_verified": {
+        "dividend -> dividend": 4,
+        "mna -> mna": 12,
+        "none -> none": 18
+      },
+      "rep_agreement": 1.0
+    },
+    "keyword": {
+      "n_runs": 70,
+      "n_scored_verified": 34,
+      "accuracy_verified": 1.0,
+      "per_label": {
+        "mna": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 12
+        },
+        "dividend": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 4
+        }
+      },
+      "none_specificity": 1.0,
+      "by_group": {
+        "confuser": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "format": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "long": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "multi": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "negative": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "typical": {
+          "n_scored": 34,
+          "accuracy": 1.0
+        }
+      },
+      "unclear_rate_non_ambiguous": 0.0,
+      "classify_failed_rate": 0.0143,
+      "failed_by_code": {
+        "CLASSIFICATION_PARSE_FAILED": 1
+      },
+      "first_attempt_quote_pass_rate": 1.0,
+      "classify_retry_rate": 0.1,
+      "input_coverage_verified": 1.0,
+      "input_coverage_n": 16,
+      "errors": 0,
+      "tokens_per_doc_mean": 2753.7,
+      "tokens_total": 192758,
+      "latency_ms_per_doc_mean": 3058,
+      "confusion_verified": {
+        "dividend -> dividend": 4,
+        "mna -> mna": 12,
+        "none -> none": 18
+      },
+      "rep_agreement": 0.9714
+    }
+  },
+  "paired": {
+    "head vs structured": {
+      "n_paired": 17,
+      "a_right_b_wrong": 0,
+      "a_wrong_b_right": 0,
+      "p_value": 1.0
+    },
+    "head vs keyword": {
+      "n_paired": 17,
+      "a_right_b_wrong": 0,
+      "a_wrong_b_right": 0,
+      "p_value": 1.0
+    },
+    "structured vs keyword": {
+      "n_paired": 17,
+      "a_right_b_wrong": 0,
+      "a_wrong_b_right": 0,
+      "p_value": 1.0
+    }
+  }
+}

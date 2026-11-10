@@ -211,7 +211,15 @@ def _redact_coverage(row: dict[str, Any], arms: list[str]) -> dict[str, Any]:
 def _redact_record(rec: dict[str, Any]) -> dict[str, Any]:
     out = {**rec, "gold_projected": "+".join(rec["gold_projected"])}
     if not rec["verified"]:
-        out.update(gold_projected="", expected="", correct="", multi="", coverage="")
+        out.update(
+            gold_projected="",
+            expected="",
+            correct="",
+            multi="",
+            coverage="",
+            predicted="",
+            error_code="",
+        )
     return out
 
 
@@ -365,6 +373,24 @@ async def run_real(args: argparse.Namespace, cases: list[e1.Case]) -> Path:
             break
 
     _write_csv(out / "per_case.csv", [_redact_record(r) for r in records])
+    sealed = [r for r in records if not r["verified"]]
+    if sealed:  # model answers on not-yet-labelled cases would anchor the labeller
+        (out / "_sealed").mkdir(exist_ok=True)
+        _write_csv(
+            out / "_sealed" / "unverified_predictions.csv",
+            [
+                {
+                    k: r[k]
+                    for k in ("case_id", "variant", "rep", "predicted", "error_code")
+                }
+                for r in sealed
+            ],
+        )
+        (out / "_sealed" / "README.md").write_text(
+            "Model answers for cases that are not human-verified yet.\n"
+            "Do not open before blind labelling is finished.\n",
+            encoding="utf-8",
+        )
     summary: dict[str, Any] = {
         "calls_used": calls_used,
         "stopped_early": stopped_early,
