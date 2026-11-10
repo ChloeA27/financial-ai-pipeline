@@ -75,9 +75,15 @@ class ExtractionRepository:
         if self._output_dir:
             await write_json_output(final_state, self._output_dir)
 
-        # ── Step 2: Bronze — keep the exact source text, passed or failed ──
-        source_hash = _source_hash(final_state)
-        raw_uri = await store_raw(source_hash, final_state.get("raw_content", ""))
+        # ── Step 2: Bronze — the Reader already stored the file's bytes; ──
+        #    states that were not built from a file get their text stored now.
+        raw_uri = final_state.get("raw_uri")
+        source_hash = final_state.get("source_hash")
+        if not (raw_uri and source_hash and Path(raw_uri).exists()):
+            data = final_state.get("raw_content", "").encode("utf-8")
+            source_hash = content_hash(data)
+            raw_uri = await store_raw(source_hash, data)
+        final_state = {**final_state, "source_hash": source_hash, "raw_uri": raw_uri}
 
         # ── Step 3: Route to the correct persistence branch ──
         validation_passed = final_state.get("validation_passed") is True
@@ -107,10 +113,11 @@ class ExtractionRepository:
         conn = await get_connection()
         try:
             await conn.execute(
-                "INSERT INTO documents (source_hash, raw_uri, size_chars, "
+                "INSERT INTO documents (source_hash, raw_uri, size_bytes, encoding, "
                 "first_file_path, first_seen_at, last_file_path, last_seen_at, "
-                "last_run_id, last_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "last_run_id, last_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(source_hash) DO UPDATE SET "
+                "encoding = COALESCE(excluded.encoding, documents.encoding), "
                 "last_file_path = excluded.last_file_path, "
                 "last_seen_at = excluded.last_seen_at, "
                 "last_run_id = excluded.last_run_id, "
@@ -118,7 +125,8 @@ class ExtractionRepository:
                 (
                     source_hash,
                     raw_uri,
-                    len(final_state.get("raw_content", "")),
+                    Path(raw_uri).stat().st_size,
+                    final_state.get("source_encoding"),
                     file_path,
                     now,
                     file_path,

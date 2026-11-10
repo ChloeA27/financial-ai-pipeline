@@ -200,8 +200,10 @@ def _run_pipeline_for(source_file: str, raw_data_dir: Path = RAW_DATA_DIR) -> di
         # Override DB paths so eval runs in complete isolation
         original_db = settings.sqlite_db_path
         original_chroma = settings.chromadb_path
+        original_raw = settings.raw_store_path
         settings.sqlite_db_path = str(Path(tmpdir) / "eval.db")
         settings.chromadb_path = str(Path(tmpdir) / "chromadb")
+        settings.raw_store_path = str(Path(tmpdir) / "raw")
 
         # Reset ChromaDB singleton so the next get_chroma_client() call
         # picks up the temp path. Same pattern used in test_rag.py fixtures.
@@ -216,6 +218,7 @@ def _run_pipeline_for(source_file: str, raw_data_dir: Path = RAW_DATA_DIR) -> di
             # Restore original settings
             settings.sqlite_db_path = original_db
             settings.chromadb_path = original_chroma
+            settings.raw_store_path = original_raw
             # Reset ChromaDB singleton back to the production path
             override_chroma_path(None)
 

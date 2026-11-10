@@ -107,7 +107,13 @@ class PipelineState(TypedDict):
     """Full raw text content of the announcement file."""
 
     source_hash: str
-    """SHA-256 of ``raw_content``; key of the raw (bronze) layer."""
+    """SHA-256 of the source file's bytes; key of the raw (bronze) layer."""
+
+    raw_uri: Optional[str]
+    """Where the unchanged source bytes are stored (bronze)."""
+
+    source_encoding: Optional[str]
+    """How the bytes were decoded: utf-8, utf-8-bom or cp1252 (None if decoding failed)."""
 
     run_id: str
     """Unique id of this pipeline invocation (links every ``step_runs`` row)."""

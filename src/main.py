@@ -13,6 +13,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from loguru import logger
 
@@ -106,13 +107,26 @@ async def _process_single(file_path: str, repo: ExtractionRepository) -> dict:
     return final_state
 
 
-def _crashed_state(file_path: str, raw_content: str, exc: BaseException) -> dict:
-    """State for a document whose pipeline raised, so it is routed to the DLQ."""
+def _crashed_state(
+    file_path: str,
+    raw_content: str,
+    exc: BaseException,
+    read_state: Optional[dict] = None,
+) -> dict:
+    """
+    State for a document whose pipeline raised, so it is routed to the DLQ.
+
+    ``read_state`` (the Reader's state for this file, if any) supplies the
+    bronze identity, so the DLQ row points at the stored original bytes.
+    """
     message = f"pipeline raised {type(exc).__name__}: {exc}"
+    read_state = read_state or {}
     return {
         "file_path": file_path,
         "raw_content": raw_content,
-        "source_hash": content_hash(raw_content),
+        "source_hash": read_state.get("source_hash") or content_hash(raw_content),
+        "raw_uri": read_state.get("raw_uri"),
+        "source_encoding": read_state.get("source_encoding"),
         "run_id": uuid.uuid4().hex,
         "step_runs": [],
         "doc_type": None,
@@ -153,7 +167,7 @@ async def _process_batch_concurrent(
     elapsed = time.perf_counter() - start
 
     # Summarise + persist
-    raw_by_path = {s["file_path"]: s.get("raw_content", "") for s in states}
+    state_by_path = {s["file_path"]: s for s in states}
     passed = 0
     failed = 0
     for file_path, res in zip(file_paths, results):
@@ -162,7 +176,10 @@ async def _process_batch_concurrent(
             failed += 1
             # Don't lose the document: quarantine it so it shows up in the DLQ
             # (and on the dashboard) instead of only in this run's log.
-            res = _crashed_state(file_path, raw_by_path.get(file_path, ""), res)
+            read_state = state_by_path.get(file_path, {})
+            res = _crashed_state(
+                file_path, read_state.get("raw_content", ""), res, read_state
+            )
         else:
             _summarise_state(Path(file_path).name, res)
             if isinstance(res, dict) and res.get("validation_passed"):

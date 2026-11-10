@@ -520,7 +520,7 @@ Every run is persisted — passed **and** failed documents — in a medallion la
 
 | Layer | Content | Storage | Written for |
 |-------|---------|---------|-------------|
-| **Bronze (raw)** | Full source text, write-once, file name = SHA-256 (`src/storage/raw_store.py`); registry table `documents` | `data/raw/<sha256>.txt` (object storage later — only `raw_uri` changes) | every document |
+| **Bronze (raw)** | Original file bytes, write-once, file name = SHA-256 of the bytes (`src/storage/raw_store.py`); registry table `documents` (size, encoding, first/last seen) | `data/raw/<sha256>.txt` (object storage later — only `raw_uri` changes) | every document |
 | **Silver (staging)** | `step_runs`: one row per node execution (stage, attempt, outcome, error code/category, parsed output, raw LLM reply, model, prompt version, tokens, latency); `dead_letter_queue`; `correction_logs` | SQLite | every document / every attempt |
 | **Gold (curated)** | `extractions`: validated results, SCD Type 2 | SQLite | passed documents only |
 
@@ -528,7 +528,7 @@ Links between layers: `step_runs.run_id` groups one invocation; `source_hash` (i
 
 > **Gold ≠ verified.** There is no LLM-as-judge yet; gold means *passed the deterministic validators*. `step_runs` is an **audit log**, not a LangGraph checkpointer: it is append-only and queryable with SQL, but it cannot resume a half-finished run.
 
-> **What the raw layer stores** is the text exactly as the pipeline processed it (UTF-8, read in text mode, so CRLF arrives as LF) — the same text the hash and the LLM calls refer to, not a byte-for-byte copy of the original file.
+> **What the raw layer stores** is the source file's **bytes, unchanged** (encoding and line endings as they were); the key is the SHA-256 of those bytes, so it matches `sha256sum` of the original. The Reader stores them *before* decoding, then decodes for the LLM: UTF-8 (with or without BOM) → Windows-1252 fallback, line endings normalised to `\n`; the encoding used is recorded in `documents.encoding`. Bytes that cannot be decoded (or contain NUL, i.e. binary) are still stored, and the document goes to the DLQ with stage `read`, code `DECODE_FAILED` — it is no longer silently skipped.
 
 > **Persistence timing.** Nodes only *return* their `step_runs` records (an `operator.add` reducer on the state concatenates them); everything is written by the Repository after the graph finishes. A process killed mid-run therefore loses that run's records — acceptable for batch reruns, and the reason a checkpointer would be the next step if resumability were needed.
 
@@ -567,7 +567,8 @@ CREATE TABLE extractions (
 CREATE TABLE documents (
     source_hash     TEXT PRIMARY KEY,
     raw_uri         TEXT NOT NULL,
-    size_chars      INTEGER NOT NULL,
+    size_bytes      INTEGER NOT NULL,
+    encoding        TEXT,                 -- utf-8 | utf-8-bom | cp1252 | NULL
     first_file_path TEXT NOT NULL,
     first_seen_at   TEXT NOT NULL,
     last_file_path  TEXT NOT NULL,

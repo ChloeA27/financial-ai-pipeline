@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS extractions (
 CREATE TABLE IF NOT EXISTS documents (
     source_hash         TEXT PRIMARY KEY,
     raw_uri             TEXT NOT NULL,
-    size_chars          INTEGER NOT NULL,
+    size_bytes          INTEGER NOT NULL,
+    encoding            TEXT,           -- utf-8 | utf-8-bom | cp1252 | NULL (undecodable)
     first_file_path     TEXT NOT NULL,
     first_seen_at       TEXT NOT NULL,
     last_file_path      TEXT NOT NULL,

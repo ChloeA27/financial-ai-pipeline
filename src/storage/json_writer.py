@@ -39,6 +39,8 @@ async def write_json_output(state: dict, output_dir: str) -> None:
         "file_path": state.get("file_path"),
         "run_id": state.get("run_id"),
         "source_hash": state.get("source_hash"),
+        "raw_uri": state.get("raw_uri"),
+        "source_encoding": state.get("source_encoding"),
         "doc_type": state.get("doc_type"),
         "classification": state.get("classification"),
         "validation_passed": state.get("validation_passed"),

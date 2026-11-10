@@ -89,7 +89,7 @@ Every run is persisted in a medallion layout — passed **and** failed documents
 
 | Layer | What | Where |
 |-------|------|-------|
-| Bronze (raw) | The full source text, written once and never modified, named by its SHA-256 | `data/raw/<sha256>.txt` + `documents` table (registry: `raw_uri`, first/last seen, last run, last status) |
+| Bronze (raw) | The original file **bytes**, stored before decoding, written once and never modified, named by their SHA-256 (matches `sha256sum`). Decoding: UTF-8 → Windows-1252 fallback (recorded); undecodable or binary files go to the DLQ as `read` / `DECODE_FAILED` instead of being skipped | `data/raw/<sha256>.txt` + `documents` table (registry: `raw_uri`, size, encoding, first/last seen, last run, last status) |
 | Silver (staging) | One `step_runs` row per node execution — every classifier / extractor call and every validation, passed, rejected or fatal: raw LLM reply, parsed output, verdict, error code, model, prompt version (hash of the exact system message), tokens, latency. Plus `dead_letter_queue` and `correction_logs` | `data/pipeline.db` |
 | Gold (curated) | Validated extractions only, SCD Type 2 versioned; each row carries `run_id` and `source_hash`, linking it to its step trail and its exact source text | `data/pipeline.db` → `extractions` |
 
