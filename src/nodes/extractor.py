@@ -23,16 +23,37 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from typing import Optional
 
 from pydantic import ValidationError
 
 from src.config import settings
-from src.llm.client import LLMClient
+from src.llm.client import LLMCallInfo, LLMClient
 from src.rag.retriever import retrieve_context
 from src.schemas.base import Metadata
 from src.schemas.extraction.dividend import DividendExtraction, DividendExtractionResult
 from src.schemas.extraction.manda import MandaExtraction, MandaExtractionResult
-from src.nodes.retry import register_failure
+from src.nodes.retry import LOOP_EXTRACT, register_failure, summarise_validation_error
+from src.nodes.step_runs import (
+    OUTCOME_FATAL,
+    OUTCOME_PASSED,
+    current_attempt,
+    make_step_run,
+    outcome_of,
+)
+from src.state.failure import (
+    CAT_INPUT_ERROR,
+    CAT_OUT_OF_SCOPE,
+    CAT_STRUCTURE,
+    CAT_TRANSIENT,
+    EMPTY_DOCUMENT,
+    LLM_CALL_FAILED,
+    MISSING_DOC_TYPE,
+    SCHEMA_PARSE_FAILED,
+    STAGE_EXTRACT,
+    UNSUPPORTED_DOC_TYPE,
+    make_failure,
+)
 from src.state.pipeline_state import PipelineState
 
 
@@ -134,20 +155,33 @@ async def extractor_node(state: PipelineState) -> dict:
     if state.get("error"):
         return {}
 
+    attempt = current_attempt(state, LOOP_EXTRACT)
     raw_content = state.get("raw_content", "").strip()
     doc_type = state.get("doc_type", "")
 
     if not raw_content:
-        return {"error": "extractor_node: raw_content is empty"}
+        return _fatal(
+            state,
+            attempt,
+            EMPTY_DOCUMENT,
+            CAT_INPUT_ERROR,
+            "extractor_node: raw_content is empty",
+        )
     if not doc_type:
-        return {"error": "extractor_node: doc_type is empty — run classifier first"}
+        return _fatal(
+            state,
+            attempt,
+            MISSING_DOC_TYPE,
+            CAT_INPUT_ERROR,
+            "extractor_node: doc_type is empty — run classifier first",
+        )
 
     # Resolve the extraction model for this doc type
     try:
         llm_model = _resolve_model(doc_type)
         result_model = _resolve_result_model(doc_type)
     except ValueError as exc:
-        return {"error": str(exc)}
+        return _fatal(state, attempt, UNSUPPORTED_DOC_TYPE, CAT_OUT_OF_SCOPE, str(exc))
 
     # Pick the system prompt
     system_prompt = EXTRACTOR_PROMPTS.get(doc_type, _get_default_prompt(doc_type))
@@ -156,16 +190,20 @@ async def extractor_node(state: PipelineState) -> dict:
     # RAG context: only on first pass (correction_feedback will handle retries)
     correction_feedback = _build_correction_feedback(state)
     user_prompt = f"Extract from this announcement:\n\n{raw_content[:6000]}"
+    rag_context_used = False
 
     if not correction_feedback:
-        # First pass → inject RAG context from historical extractions
-        rag_context = await retrieve_context(
-            doc_type=doc_type,
-            query_text=raw_content[:1000],
-            exclude_file_path=state.get("file_path") or None,
-        )
+        # First pass → inject RAG context from historical extractions (if enabled)
+        rag_context = ""
+        if settings.rag_enabled:
+            rag_context = await retrieve_context(
+                doc_type=doc_type,
+                query_text=raw_content[:1000],
+                exclude_file_path=state.get("file_path") or None,
+            )
         if rag_context:
             user_prompt = rag_context + "\n" + user_prompt
+            rag_context_used = True
     else:
         user_prompt += (
             "\n\n─── PREVIOUS VALIDATION FEEDBACK (correct these issues) ───\n"
@@ -188,6 +226,7 @@ async def extractor_node(state: PipelineState) -> dict:
 
         metadata = Metadata(
             source_path=state.get("file_path", ""),
+            source_hash=state.get("source_hash") or None,
             processed_at=datetime.now(timezone.utc),
             model_name=settings.deepseek_model,
             doc_type=doc_type,
@@ -198,7 +237,6 @@ async def extractor_node(state: PipelineState) -> dict:
         final_result = result_model.from_extraction(
             extraction=llm_result,
             metadata=metadata,
-            raw_text_snippet=raw_content[:500],
             doc_id=real_doc_id,
         )
 
@@ -208,15 +246,34 @@ async def extractor_node(state: PipelineState) -> dict:
         return {
             "extracted_data": final_result.model_dump(mode="json"),
             "validation_passed": None,
+            "step_runs": [
+                _step(
+                    state,
+                    attempt,
+                    OUTCOME_PASSED,
+                    output={
+                        "fields": llm_result.model_dump(mode="json"),
+                        "rag_context_used": rag_context_used,
+                    },
+                    llm_call=client.last_call,
+                )
+            ],
         }
 
     except ValidationError as exc:
         # The LLM answered, but its output broke the schema (bad enum, date
         # format, out-of-range number, malformed JSON). That is exactly what
         # the self-correction loop is for, so don't abort — log and retry.
-        return _parse_failure_update(state, exc)
+        return _parse_failure_update(state, exc, attempt, client.last_call)
     except Exception as exc:
-        return {"error": f"extractor_node: LLM call failed — {exc}"}
+        return _fatal(
+            state,
+            attempt,
+            LLM_CALL_FAILED,
+            CAT_TRANSIENT,
+            f"extractor_node: LLM call failed — {exc}",
+            llm_call=client.last_call,
+        )
     finally:
         await client.close()
 
@@ -224,34 +281,67 @@ async def extractor_node(state: PipelineState) -> dict:
 # ── Schema-parse failure → self-correction ──
 
 
-def _summarise_validation_error(exc: ValidationError) -> str:
-    """Compact, LLM-readable description of what broke the schema."""
-    issues = []
-    for err in exc.errors():
-        loc = ".".join(str(p) for p in err["loc"]) or "<root>"
-        bad = repr(err.get("input"))
-        if len(bad) > 80:
-            bad = bad[:77] + "..."
-        issues.append(f"[SCHEMA] field='{loc}': {err['msg']} (value={bad})")
-    return "; ".join(issues)
+def _fatal(
+    state: PipelineState,
+    attempt: int,
+    code: str,
+    category: str,
+    message: str,
+    llm_call: Optional[LLMCallInfo] = None,
+) -> dict:
+    """State update for an unrecoverable extractor failure (→ DLQ)."""
+    failure = make_failure(STAGE_EXTRACT, code, category, message)
+    return {
+        "error": message,
+        "failure": failure,
+        "step_runs": [
+            _step(state, attempt, OUTCOME_FATAL, failure=failure, llm_call=llm_call)
+        ],
+    }
 
 
-def _parse_failure_update(state: PipelineState, exc: ValidationError) -> dict:
+def _step(state: PipelineState, attempt: int, outcome: str, **kw) -> dict:
+    """Audit record for one extractor call."""
+    return make_step_run(
+        state,
+        stage=STAGE_EXTRACT,
+        loop=LOOP_EXTRACT,
+        attempt=attempt,
+        outcome=outcome,
+        **kw,
+    )
+
+
+# Kept as a module-level alias: the helper now lives in ``retry`` so the
+# Classifier can share it.
+_summarise_validation_error = summarise_validation_error
+
+
+def _parse_failure_update(
+    state: PipelineState,
+    exc: ValidationError,
+    attempt: int,
+    llm_call: Optional[LLMCallInfo],
+) -> dict:
     """
     Build the state update for an LLM output that failed schema parsing.
 
     Goes through the same ``register_failure`` bookkeeping as the Validator,
     so the router treats both kinds of failure identically.
     """
-    summary = _summarise_validation_error(exc)
+    summary = summarise_validation_error(exc)
     max_retries = state.get("max_retries", 3)
+    exhausted = (
+        f"extractor_node: max retries ({max_retries}) exhausted. "
+        "LLM output never matched the extraction schema."
+    )
     update = register_failure(
         state,
         error_summary=summary,
         report=f"Extraction output failed schema parsing:\n  - {summary}",
-        exhausted_message=(
-            f"extractor_node: max retries ({max_retries}) exhausted. "
-            "LLM output never matched the extraction schema."
+        exhausted_message=exhausted,
+        failure=make_failure(
+            STAGE_EXTRACT, SCHEMA_PARSE_FAILED, CAT_STRUCTURE, exhausted
         ),
     )
     update["extracted_data"] = None
@@ -259,6 +349,17 @@ def _parse_failure_update(state: PipelineState, exc: ValidationError) -> dict:
     update["validation_report"] = (
         f"Extraction output failed schema parsing:\n  - {summary}"
     )
+    update["step_runs"] = [
+        _step(
+            state,
+            attempt,
+            outcome_of(update),
+            output={"schema_errors": summary},
+            llm_call=llm_call,
+            error_code=SCHEMA_PARSE_FAILED,
+            error_category=CAT_STRUCTURE,
+        )
+    ]
     return update
 
 

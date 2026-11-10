@@ -39,3 +39,8 @@ DOCS_BACKGROUND.md
 .coverage
 htmlcov/
 .pytest_cache/
+
+# E1 run artefacts: databases and copied inputs stay local (summaries, manifests and per-case CSVs are committed)
+results/**/run.db*
+results/**/raw/
+results/**/chroma/

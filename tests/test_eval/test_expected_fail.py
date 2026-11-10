@@ -84,3 +84,43 @@ def test_passing_a_should_fail_document_is_a_failure() -> None:
     p, _, detail = _score(doc_type="M&A", validation_passed=True)
     assert p == 0
     assert "expected fail" in detail
+
+
+class TestStructuredFailuresDecideCredit:
+    """The structured ``failure`` category is what separates a judgement from an outage."""
+
+    @pytest.mark.parametrize(
+        "category", ["out_of_scope", "ambiguous", "structure", "reference"]
+    )
+    def test_judged_rejections_earn_credit(self, category: str) -> None:
+        p, _, _ = _score(
+            doc_type=None,
+            validation_passed=None,
+            error="classification: rejected",
+            failure={"stage": "classify", "code": "X", "category": category},
+        )
+        assert p == 1
+
+    @pytest.mark.parametrize("category", ["transient", "input_error"])
+    def test_infrastructure_failures_earn_nothing(self, category: str) -> None:
+        p, _, detail = _score(
+            doc_type=None,
+            validation_passed=None,
+            error="classifier_node: LLM call failed",
+            failure={"stage": "classify", "code": "X", "category": category},
+        )
+        assert p == 0
+        assert "infrastructure" in detail
+
+    def test_none_label_is_a_rejection(self) -> None:
+        p, _, _ = _score(
+            doc_type="none",
+            validation_passed=None,
+            error="classification: not a supported type",
+            failure={
+                "stage": "classify",
+                "code": "UNSUPPORTED_DOC_TYPE",
+                "category": "out_of_scope",
+            },
+        )
+        assert p == 1

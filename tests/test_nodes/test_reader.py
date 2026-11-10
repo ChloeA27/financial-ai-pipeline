@@ -234,3 +234,14 @@ class TestReaderNode:
         }
         result = await reader_node(state)
         assert result == {}
+
+
+class TestRunIdentity:
+    def test_state_carries_content_hash_and_a_fresh_run_id(self) -> None:
+        from src.utils.hashing import content_hash
+
+        a = _init_pipeline_state("/tmp/a.txt", "same text")
+        b = _init_pipeline_state("/tmp/a.txt", "same text")
+        assert a["source_hash"] == b["source_hash"] == content_hash("same text")
+        assert a["run_id"] != b["run_id"]
+        assert a["step_runs"] == []

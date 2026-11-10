@@ -1,0 +1,55 @@
+{
+  "verified_positive": {
+    "n": 8,
+    "head": 0.875,
+    "structured": 1.0,
+    "keyword": 1.0,
+    "head_same_budget": 1.0,
+    "by_group": {
+      "typical": {
+        "n": 8,
+        "head": 0.875,
+        "structured": 1.0,
+        "keyword": 1.0,
+        "head_same_budget": 1.0
+      }
+    }
+  },
+  "all_positive_drafts": {
+    "n": 16,
+    "head": 0.625,
+    "structured": 0.875,
+    "keyword": 0.8125,
+    "head_same_budget": 0.6875,
+    "by_group": {
+      "confuser": {
+        "n": 2,
+        "head": 0.5,
+        "structured": 1.0,
+        "keyword": 0.5,
+        "head_same_budget": 0.5
+      },
+      "long": {
+        "n": 2,
+        "head": 0.5,
+        "structured": 0.0,
+        "keyword": 0.0,
+        "head_same_budget": 0.5
+      },
+      "multi": {
+        "n": 4,
+        "head": 0.25,
+        "structured": 1.0,
+        "keyword": 1.0,
+        "head_same_budget": 0.25
+      },
+      "typical": {
+        "n": 8,
+        "head": 0.875,
+        "structured": 1.0,
+        "keyword": 1.0,
+        "head_same_budget": 1.0
+      }
+    }
+  }
+}

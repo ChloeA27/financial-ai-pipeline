@@ -10,6 +10,8 @@ from typing import Any, Literal
 import pytest
 
 from src.graph.builder import (
+    _route_after_classification_validation,
+    _route_after_classifier,
     _route_after_extraction,
     _route_after_validation,
     build_pipeline,
@@ -155,6 +157,62 @@ class TestRouteAfterExtraction:
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  Classify-loop routers
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestRouteAfterClassifier:
+    def test_normal_success_goes_to_the_classification_validator(self) -> None:
+        state = {"classification_passed": None, "classify_retry_count": 0}
+        assert _route_after_classifier(state) == "classification_validator"
+
+    def test_parse_failure_with_budget_retries_the_classifier(self) -> None:
+        state = {
+            "classification_passed": False,
+            "classify_retry_count": 1,
+            "classify_max_retries": 2,
+        }
+        assert _route_after_classifier(state) == "classifier"
+
+    def test_error_ends(self) -> None:
+        state = {"classification_passed": False, "error": "boom"}
+        assert _route_after_classifier(state) == "__end__"
+
+    def test_budget_overrun_without_error_flag_still_ends(self) -> None:
+        state = {
+            "classification_passed": False,
+            "classify_retry_count": 3,
+            "classify_max_retries": 2,
+        }
+        assert _route_after_classifier(state) == "__end__"
+
+
+class TestRouteAfterClassificationValidation:
+    def test_accepted_goes_to_extractor(self) -> None:
+        assert (
+            _route_after_classification_validation({"classification_passed": True})
+            == "extractor"
+        )
+
+    def test_rejected_with_budget_goes_back_to_classifier(self) -> None:
+        state = {
+            "classification_passed": False,
+            "classify_retry_count": 2,
+            "classify_max_retries": 2,
+        }
+        assert _route_after_classification_validation(state) == "classifier"
+
+    def test_error_wins_over_acceptance(self) -> None:
+        """Terminal labels (none / unclear) are accepted *and* carry an error."""
+        state = {"classification_passed": True, "error": "not a supported type"}
+        assert _route_after_classification_validation(state) == "__end__"
+
+    def test_exhausted_budget_ends(self) -> None:
+        state = {"classification_passed": False, "error": "max retries exhausted"}
+        assert _route_after_classification_validation(state) == "__end__"
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  Whole graph with a scripted LLM (real parsing, no network)
 # ═══════════════════════════════════════════════════════════════════
 
@@ -177,7 +235,10 @@ class TestGraphSelfCorrection:
         src.write_text("Acme to acquire Widgets Inc. for $1B in cash.")
         return FakeOpenAI, str(src)
 
-    CLASSIFY = '{"doc_type": "M&A", "confidence": 0.9, "reasoning": "deal"}'
+    CLASSIFY = (
+        '{"doc_type": "M&A", "evidence_quote": "Acme to acquire Widgets Inc. for $1B",'
+        ' "confidence": 0.9, "reasoning": "deal"}'
+    )
     GOOD = (
         '{"acquirer": "Acme", "target": "Widgets Inc.", "total_value_usd": 1e9,'
         ' "payment_method": "Cash"}'
@@ -251,6 +312,141 @@ class TestGraphSelfCorrection:
         assert "validator_node: max retries (3) exhausted" in result["error"]
         assert fake.queue == []
 
+    # ── classify loop ──
+
+    BAD_QUOTE = (
+        '{"doc_type": "M&A", "evidence_quote": "agreed to buy Widgets outright",'
+        ' "confidence": 0.9, "reasoning": "deal"}'
+    )
+    BAD_LABEL = (
+        '{"doc_type": "Management_Change", "evidence_quote": "",'
+        ' "confidence": 0.9, "reasoning": "x"}'
+    )
+    NONE = '{"doc_type": "none", "confidence": 0.8, "reasoning": "earnings"}'
+    UNCLEAR = '{"doc_type": "unclear", "confidence": 0.4, "reasoning": "mixed"}'
+
+    async def test_bad_quote_is_retried_with_feedback_then_recovers(
+        self, scripted
+    ) -> None:
+        fake, path = scripted
+        fake.queue = [self.BAD_QUOTE, self.CLASSIFY, self.GOOD]
+
+        result = await run_pipeline(path)
+
+        assert result["validation_passed"] is True
+        assert result["classify_retry_count"] == 1
+        assert result["retry_count"] == 0  # extraction budget untouched
+        [log] = result["correction_logs"]
+        assert log["loop"] == "classify"
+        assert "[REFERENCE]" in log["error_summary"]
+        # the second classifier prompt carries the feedback
+        second_classifier_prompt = fake.calls[1][-1]["content"]
+        assert "PREVIOUS CLASSIFICATION FEEDBACK" in second_classifier_prompt
+        assert fake.queue == []
+
+    async def test_unparsable_label_is_retried_then_recovers(self, scripted) -> None:
+        fake, path = scripted
+        fake.queue = [self.BAD_LABEL, self.CLASSIFY, self.GOOD]
+
+        result = await run_pipeline(path)
+
+        assert result["validation_passed"] is True
+        assert result["classify_retry_count"] == 1
+        assert "[SCHEMA]" in result["correction_logs"][0]["error_summary"]
+
+    async def test_classification_that_never_validates_stops_before_extraction(
+        self, scripted
+    ) -> None:
+        fake, path = scripted
+        fake.queue = [self.BAD_QUOTE] * 3 + [self.GOOD]  # 1 attempt + 2 retries
+
+        result = await run_pipeline(path)
+
+        assert result["doc_type"] is None
+        assert "classification_validator: max retries (2) exhausted" in result["error"]
+        failure = result["failure"]
+        assert (failure["stage"], failure["code"], failure["category"]) == (
+            "classify_validate",
+            "EVIDENCE_QUOTE_NOT_FOUND",
+            "reference",
+        )
+        assert len(fake.calls) == 3  # three classifier calls, no extraction call
+        assert fake.queue == [self.GOOD]
+        assert result["extracted_data"] is None
+
+    async def test_unparsable_classifier_output_that_never_recovers(
+        self, scripted
+    ) -> None:
+        fake, path = scripted
+        fake.queue = [self.BAD_LABEL] * 3 + [self.GOOD]
+
+        result = await run_pipeline(path)
+
+        assert result["failure"]["stage"] == "classify"
+        assert result["failure"]["code"] == "CLASSIFICATION_PARSE_FAILED"
+        assert fake.queue == [self.GOOD]
+
+    async def test_none_label_is_out_of_scope_and_skips_extraction(
+        self, scripted
+    ) -> None:
+        fake, path = scripted
+        fake.queue = [self.NONE, self.GOOD]
+
+        result = await run_pipeline(path)
+
+        assert result["doc_type"] == "none"
+        assert result["failure"]["code"] == "UNSUPPORTED_DOC_TYPE"
+        assert result["failure"]["category"] == "out_of_scope"
+        assert result["retry_count"] == 0 and result["classify_retry_count"] == 0
+        assert fake.queue == [self.GOOD]  # the extractor never ran
+
+    async def test_unclear_label_needs_a_human_and_skips_extraction(
+        self, scripted
+    ) -> None:
+        fake, path = scripted
+        fake.queue = [self.UNCLEAR, self.GOOD]
+
+        result = await run_pipeline(path)
+
+        assert result["failure"]["code"] == "CLASSIFICATION_UNCLEAR"
+        assert result["failure"]["category"] == "ambiguous"
+        assert fake.queue == [self.GOOD]
+
+    async def test_the_two_budgets_are_independent(self, scripted) -> None:
+        fake, path = scripted
+        # classification needs both its retries, then extraction exhausts its own
+        fake.queue = [self.BAD_QUOTE, self.BAD_QUOTE, self.CLASSIFY] + [
+            self.BAD_ENUM
+        ] * 4
+
+        result = await run_pipeline(path)
+
+        assert result["classify_retry_count"] == 2
+        assert result["retry_count"] == 3
+        by_loop = {
+            loop: [l["cycle"] for l in result["correction_logs"] if l["loop"] == loop]
+            for loop in ("classify", "extract")
+        }
+        assert by_loop == {"classify": [1, 2], "extract": [1, 2, 3, 4]}
+        assert result["failure"]["stage"] == "extract"
+        assert result["failure"]["code"] == "SCHEMA_PARSE_FAILED"
+
+    async def test_validator_exhaustion_is_attributed_to_the_rule(
+        self, scripted
+    ) -> None:
+        fake, path = scripted
+        no_acquirer = '{"target": "W", "total_value_usd": 5, "payment_method": "Cash"}'
+        fake.queue = [self.CLASSIFY] + [no_acquirer] * 4
+
+        result = await run_pipeline(path)
+
+        failure = result["failure"]
+        assert (failure["stage"], failure["code"], failure["category"]) == (
+            "validate",
+            "ACQUIRER.NON_EMPTY",
+            "missing_info",
+        )
+
     def test_graph_compiles(self) -> None:
         assert build_pipeline() is not None
 
@@ -309,7 +505,7 @@ class TestRunPipeline:
 
         # doc_type should be classified
         assert result.get("doc_type") is not None
-        assert result["doc_type"] in ("M&A", "Dividend", "Management_Change", "Unknown")
+        assert result["doc_type"] in ("M&A", "Dividend", "none", "unclear")
 
         # extracted_data should be populated (even if extraction failed)
         assert (

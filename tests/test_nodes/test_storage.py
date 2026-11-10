@@ -84,7 +84,6 @@ def passed_extraction_state() -> dict[str, Any]:
                 "retry_count": 0,
                 "extra": {},
             },
-            "raw_text_snippet": "Microsoft to acquire Activision for $68.7B.",
             "acquirer": "Microsoft Corporation",
             "target": "Activision Blizzard, Inc.",
             "total_value_usd": 68700000000.0,
@@ -122,7 +121,7 @@ def failed_extraction_state() -> dict[str, Any]:
 
 class TestDBInit:
     async def test_init_db_creates_tables(self, tmp_db: str) -> None:
-        """After init_db, the 4 core tables should exist."""
+        """After init_db, the bronze / silver / gold tables should exist."""
         conn = await get_connection()
         try:
             tables = await conn.execute_fetchall(
@@ -130,9 +129,11 @@ class TestDBInit:
             )
             table_names = [r["name"] for r in tables]
             assert "extractions" in table_names
-            assert "extraction_sources" in table_names
+            assert "documents" in table_names
+            assert "step_runs" in table_names
             assert "correction_logs" in table_names
             assert "dead_letter_queue" in table_names
+            assert "extraction_sources" not in table_names  # replaced by raw store
         finally:
             await conn.close()
 
@@ -225,7 +226,7 @@ class TestRepositoryUpsert:
             await conn.close()
 
     async def test_scd_type2_removes_superseded_vector(
-        self, tmp_db: str, passed_extraction_state: dict[str, Any]
+        self, tmp_db: str, passed_extraction_state: dict[str, Any], rag_on: None
     ) -> None:
         """An archived version must stop being served as RAG context."""
         from src.rag.chroma_client import get_or_create_collection
@@ -263,7 +264,7 @@ class TestRepositoryUpsert:
             await conn.close()
 
     async def test_idempotent_rerun_keeps_vector(
-        self, tmp_db: str, passed_extraction_state: dict[str, Any]
+        self, tmp_db: str, passed_extraction_state: dict[str, Any], rag_on: None
     ) -> None:
         from src.rag.chroma_client import get_or_create_collection
 
@@ -273,7 +274,7 @@ class TestRepositoryUpsert:
         assert get_or_create_collection("M&A").count() == 1
 
     async def test_other_files_vectors_untouched(
-        self, tmp_db: str, passed_extraction_state: dict[str, Any]
+        self, tmp_db: str, passed_extraction_state: dict[str, Any], rag_on: None
     ) -> None:
         from src.rag.chroma_client import get_or_create_collection
 
@@ -323,21 +324,24 @@ class TestRepositoryUpsert:
         finally:
             await conn.close()
 
-    async def test_raw_text_snippet_saved(
+    async def test_full_source_text_is_kept_in_the_raw_store(
         self, tmp_db: str, passed_extraction_state: dict[str, Any]
     ) -> None:
-        """Raw text snippet should be written to extraction_sources."""
+        """The whole text (not a 500-char snippet) is stored and registered."""
+        from src.storage.raw_store import read_raw
+
         repo = ExtractionRepository()
         await repo.save_extraction(passed_extraction_state)
 
         conn = await get_connection()
         try:
-            sources = await conn.execute_fetchall("SELECT * FROM extraction_sources")
-            assert len(sources) == 1
-            assert sources[0]["doc_id"] == "abc123def456"
-            assert "Microsoft" in sources[0]["raw_text_snippet"]
+            docs = await conn.execute_fetchall("SELECT * FROM documents")
         finally:
             await conn.close()
+        assert len(docs) == 1
+        assert docs[0]["last_status"] == "stored"
+        text = await read_raw(docs[0]["raw_uri"])
+        assert text == passed_extraction_state["raw_content"]
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -417,6 +421,222 @@ class TestRepositoryDLQ:
             assert len(dlq_rows) == 1
         finally:
             await conn.close()
+
+
+class TestRagSwitchedOff:
+    async def test_validated_result_is_not_embedded_when_rag_is_off(
+        self, tmp_db: str, passed_extraction_state: dict[str, Any]
+    ) -> None:
+        from src.config import settings
+        from src.rag.chroma_client import get_or_create_collection
+
+        assert settings.rag_enabled is False  # the default
+        await ExtractionRepository().save_extraction(passed_extraction_state)
+
+        assert get_or_create_collection("M&A").count() == 0
+        conn = await get_connection()
+        try:
+            rows = await conn.execute_fetchall("SELECT id FROM extractions")
+        finally:
+            await conn.close()
+        assert len(rows) == 1  # the gold row is still written
+
+
+class TestDLQFailureColumns:
+    """The DLQ says where and why a document stopped, and keeps its history."""
+
+    @pytest.fixture
+    def classified_failure_state(
+        self, failed_extraction_state: dict[str, Any]
+    ) -> dict[str, Any]:
+        return {
+            **failed_extraction_state,
+            "doc_type": None,
+            "classification": {
+                "label": "M&A",
+                "evidence_quote": "made up quote",
+                "confidence": 0.9,
+                "reasoning": "r",
+            },
+            "failure": {
+                "stage": "classify_validate",
+                "code": "EVIDENCE_QUOTE_NOT_FOUND",
+                "category": "reference",
+                "message": "exhausted",
+                "details": {"failures": [{"code": "EVIDENCE_QUOTE_NOT_FOUND"}]},
+            },
+            "correction_logs": [
+                {
+                    "cycle": 1,
+                    "error_summary": "[REFERENCE] quote not found",
+                    "raw_feedback": "...",
+                    "loop": "classify",
+                }
+            ],
+            "error": "classification_validator: max retries (2) exhausted.",
+        }
+
+    async def _only_row(self) -> Any:
+        conn = await get_connection()
+        try:
+            rows = await conn.execute_fetchall("SELECT * FROM dead_letter_queue")
+        finally:
+            await conn.close()
+        assert len(rows) == 1
+        return rows[0]
+
+    async def test_stage_code_and_category_are_columns(
+        self, tmp_db: str, classified_failure_state: dict[str, Any]
+    ) -> None:
+        await ExtractionRepository().save_extraction(classified_failure_state)
+        row = await self._only_row()
+
+        assert row["failed_stage"] == "classify_validate"
+        assert row["error_code"] == "EVIDENCE_QUOTE_NOT_FOUND"
+        assert row["error_category"] == "reference"
+        assert json.loads(row["failure_details"])["failures"][0]["code"] == (
+            "EVIDENCE_QUOTE_NOT_FOUND"
+        )
+
+    async def test_correction_history_and_classification_survive(
+        self, tmp_db: str, classified_failure_state: dict[str, Any]
+    ) -> None:
+        """These are otherwise lost: failed docs never reach correction_logs."""
+        await ExtractionRepository().save_extraction(classified_failure_state)
+        row = await self._only_row()
+
+        logs = json.loads(row["correction_logs"])
+        assert logs[0]["loop"] == "classify"
+        assert "quote not found" in logs[0]["error_summary"]
+        assert json.loads(row["classification"])["evidence_quote"] == "made up quote"
+
+    async def test_error_without_failure_record_gets_a_fallback(
+        self, tmp_db: str, failed_extraction_state: dict[str, Any]
+    ) -> None:
+        await ExtractionRepository().save_extraction(failed_extraction_state)
+        row = await self._only_row()
+
+        assert row["failed_stage"] == "pipeline"
+        assert row["error_code"] == "UNCLASSIFIED_ERROR"
+        assert row["error_category"] == "unknown"
+        assert row["classification"] is None
+
+    async def test_repeat_failure_refreshes_the_new_columns(
+        self, tmp_db: str, classified_failure_state: dict[str, Any]
+    ) -> None:
+        repo = ExtractionRepository()
+        await repo.save_extraction(classified_failure_state)
+
+        later = dict(classified_failure_state)
+        later["failure"] = {
+            "stage": "validate",
+            "code": "TARGET.NON_EMPTY",
+            "category": "missing_info",
+            "message": "m",
+            "details": None,
+        }
+        await repo.save_extraction(later)
+        row = await self._only_row()
+
+        assert row["failed_stage"] == "validate"
+        assert row["error_code"] == "TARGET.NON_EMPTY"
+        assert row["failure_details"] is None
+
+    async def test_successful_extraction_logs_keep_their_loop(
+        self, tmp_db: str, passed_extraction_state: dict[str, Any]
+    ) -> None:
+        state = dict(passed_extraction_state)
+        state["extracted_data"] = state.get("extracted_data") or {
+            "doc_id": "doc-1",
+            "acquirer": "A",
+            "target": "B",
+            "raw_text_snippet": "x",
+        }
+        state["correction_logs"] = [
+            {"cycle": 1, "error_summary": "c", "raw_feedback": "c", "loop": "classify"},
+            {"cycle": 1, "error_summary": "e", "raw_feedback": "e", "loop": "extract"},
+        ]
+        await ExtractionRepository().save_extraction(state)
+
+        conn = await get_connection()
+        try:
+            rows = await conn.execute_fetchall(
+                "SELECT loop, cycle FROM correction_logs ORDER BY id"
+            )
+        finally:
+            await conn.close()
+        assert [(r["loop"], r["cycle"]) for r in rows] == [
+            ("classify", 1),
+            ("extract", 1),
+        ]
+
+
+class TestSchemaMigration:
+    async def test_old_database_gains_the_new_columns_without_losing_rows(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        import sqlite3
+
+        from src.config import settings
+
+        db_path = str(tmp_path / "old.db")
+        old = sqlite3.connect(db_path)
+        old.executescript(
+            """
+            CREATE TABLE dead_letter_queue (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL, source_hash TEXT NOT NULL, doc_type TEXT,
+                last_error TEXT NOT NULL, retry_count INTEGER NOT NULL,
+                failed_at TEXT NOT NULL
+            );
+            CREATE TABLE correction_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, doc_id TEXT NOT NULL,
+                cycle INTEGER NOT NULL, error_summary TEXT NOT NULL,
+                llm_raw_response TEXT, created_at TEXT NOT NULL
+            );
+            INSERT INTO dead_letter_queue
+                (file_path, source_hash, doc_type, last_error, retry_count, failed_at)
+                VALUES ('/old.txt', 'h', 'M&A', 'old error', 3, 'then');
+            """
+        )
+        old.commit()
+        old.close()
+
+        monkeypatch.setattr(settings, "sqlite_db_path", db_path)
+        await init_db()
+        await init_db()  # idempotent
+
+        conn = await get_connection()
+        try:
+            dlq_cols = {
+                r["name"]
+                for r in await conn.execute_fetchall(
+                    "PRAGMA table_info(dead_letter_queue)"
+                )
+            }
+            log_cols = {
+                r["name"]
+                for r in await conn.execute_fetchall(
+                    "PRAGMA table_info(correction_logs)"
+                )
+            }
+            rows = await conn.execute_fetchall("SELECT * FROM dead_letter_queue")
+        finally:
+            await conn.close()
+
+        assert {
+            "failed_stage",
+            "error_code",
+            "error_category",
+            "failure_details",
+            "classification",
+            "correction_logs",
+        } <= dlq_cols
+        assert "loop" in log_cols
+        assert "run_id" in dlq_cols
+        assert len(rows) == 1
+        assert rows[0]["last_error"] == "old error"
+        assert rows[0]["failed_stage"] is None  # legacy rows stay NULL
 
 
 # ═══════════════════════════════════════════════════════════════════

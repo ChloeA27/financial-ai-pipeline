@@ -96,6 +96,8 @@ async def test_failed_persist_does_not_abort_batch(
 def test_crashed_state_shape() -> None:
     st = main_module._crashed_state("/x.txt", "raw", ValueError("bad"))
     assert st["error"] == "pipeline raised ValueError: bad"
+    assert st["failure"]["stage"] == "pipeline"
+    assert st["failure"]["code"] == "PIPELINE_EXCEPTION"
     assert st["raw_content"] == "raw"
     assert st["validation_passed"] is None
     assert st["retry_count"] == 0

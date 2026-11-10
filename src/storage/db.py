@@ -1,12 +1,24 @@
 """
 Database layer — aiosqlite connection management & schema initialisation.
 
-Creates 4 tables + indices on startup via ``init_db()``:
+Creates the tables + indices on startup via ``init_db()``.  They map onto a
+medallion layout (bronze → silver → gold):
 
-  extractions         — Core asset table with SCD Type 2 versioning.
-  extraction_sources  — Cold-storage for raw text (hot/cold separation).
-  correction_logs     — Self-correction audit trail.
-  dead_letter_queue   — DLQ for documents that failed all retry cycles.
+  bronze  documents           — registry of every source text seen; the text
+                                itself is a write-once file in the raw store
+                                (``src/storage/raw_store.py``), keyed by SHA-256.
+  silver  step_runs           — one row per node execution (every attempt, every
+                                outcome): raw LLM reply, parsed output, verdict,
+                                prompt version, tokens, latency.
+          correction_logs     — Self-correction audit trail (per loop: classify / extract).
+          dead_letter_queue   — every document that left the pipeline without a
+                                validated extraction, with the stage / code /
+                                category that says where and why.
+  gold    extractions         — validated results only, SCD Type 2 versioned.
+
+``extraction_sources`` (a 500-character text snippet per result) is no longer
+created: the full text lives in the raw store.  Databases created earlier keep
+the table untouched; nothing writes to it any more.
 """
 
 from __future__ import annotations
@@ -37,16 +49,45 @@ CREATE TABLE IF NOT EXISTS extractions (
     model_name          TEXT NOT NULL,
     retry_count         INTEGER NOT NULL DEFAULT 0,
     created_at          TEXT NOT NULL,
-    updated_at          TEXT NOT NULL
+    updated_at          TEXT NOT NULL,
+    run_id              TEXT
 );
 
--- Table 2: extraction_sources — Cold storage for raw text
--- NOTE: No FK constraint on doc_id because extractions.doc_id is NOT
--- UNIQUE (SCD Type 2 allows multiple versions per doc_id).
-CREATE TABLE IF NOT EXISTS extraction_sources (
-    doc_id              TEXT NOT NULL,
-    raw_text_snippet    TEXT NOT NULL,
-    PRIMARY KEY (doc_id)
+-- Table 2: documents — bronze registry (the text itself is in the raw store)
+CREATE TABLE IF NOT EXISTS documents (
+    source_hash         TEXT PRIMARY KEY,
+    raw_uri             TEXT NOT NULL,
+    size_bytes          INTEGER NOT NULL,
+    encoding            TEXT,           -- utf-8 | utf-8-bom | cp1252 | NULL (undecodable)
+    first_file_path     TEXT NOT NULL,
+    first_seen_at       TEXT NOT NULL,
+    last_file_path      TEXT NOT NULL,
+    last_seen_at        TEXT NOT NULL,
+    last_run_id         TEXT,
+    last_status         TEXT            -- 'stored' (gold) | 'dlq' | stage-eval status
+);
+
+-- Table 5: step_runs — silver audit trail, one row per node execution
+CREATE TABLE IF NOT EXISTS step_runs (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id              TEXT NOT NULL,
+    source_hash         TEXT NOT NULL,
+    file_path           TEXT,
+    stage               TEXT NOT NULL,  -- classify | classify_validate | extract | validate
+    loop                TEXT NOT NULL,  -- classify | extract
+    attempt             INTEGER NOT NULL,
+    outcome             TEXT NOT NULL,  -- passed | rejected | fatal
+    error_code          TEXT,
+    error_category      TEXT,
+    output              TEXT,           -- JSON
+    model_name          TEXT,
+    prompt_version      TEXT,
+    raw_response        TEXT,
+    prompt_tokens       INTEGER,
+    completion_tokens   INTEGER,
+    total_tokens        INTEGER,
+    latency_ms          INTEGER,
+    started_at          TEXT NOT NULL
 );
 
 -- Table 3: correction_logs — Self-correction audit trail
@@ -56,7 +97,8 @@ CREATE TABLE IF NOT EXISTS correction_logs (
     cycle               INTEGER NOT NULL,
     error_summary       TEXT NOT NULL,
     llm_raw_response    TEXT,
-    created_at          TEXT NOT NULL
+    created_at          TEXT NOT NULL,
+    loop                TEXT
 );
 
 -- Table 4: dead_letter_queue — Exhausted retry cemetery
@@ -67,7 +109,14 @@ CREATE TABLE IF NOT EXISTS dead_letter_queue (
     doc_type            TEXT,
     last_error          TEXT NOT NULL,
     retry_count         INTEGER NOT NULL,
-    failed_at           TEXT NOT NULL
+    failed_at           TEXT NOT NULL,
+    failed_stage        TEXT,
+    error_code          TEXT,
+    error_category      TEXT,
+    failure_details     TEXT,
+    classification      TEXT,
+    correction_logs     TEXT,
+    run_id              TEXT
 );
 
 -- Indices
@@ -82,7 +131,48 @@ CREATE INDEX IF NOT EXISTS idx_extractions_type
 
 CREATE INDEX IF NOT EXISTS idx_correction_logs_doc_id
     ON correction_logs(doc_id);
+
+CREATE INDEX IF NOT EXISTS idx_step_runs_run
+    ON step_runs(run_id);
+
+CREATE INDEX IF NOT EXISTS idx_step_runs_doc
+    ON step_runs(source_hash);
+
+CREATE INDEX IF NOT EXISTS idx_step_runs_stage_outcome
+    ON step_runs(stage, outcome);
 """
+
+
+# Columns added after the first release.  ``CREATE TABLE IF NOT EXISTS`` does not
+# touch an existing table, so databases created earlier get them via ALTER TABLE.
+_ADDED_COLUMNS: list[tuple[str, str, str]] = [
+    ("extractions", "run_id", "TEXT"),
+    ("dead_letter_queue", "run_id", "TEXT"),
+    ("correction_logs", "loop", "TEXT"),
+    ("dead_letter_queue", "failed_stage", "TEXT"),
+    ("dead_letter_queue", "error_code", "TEXT"),
+    ("dead_letter_queue", "error_category", "TEXT"),
+    ("dead_letter_queue", "failure_details", "TEXT"),
+    ("dead_letter_queue", "classification", "TEXT"),
+    ("dead_letter_queue", "correction_logs", "TEXT"),
+]
+
+_POST_MIGRATION_SQL = """
+CREATE INDEX IF NOT EXISTS idx_dlq_stage_code
+    ON dead_letter_queue(failed_stage, error_code);
+"""
+
+
+async def _migrate(conn: aiosqlite.Connection) -> None:
+    """Add any column that an older database file is missing (idempotent)."""
+    for table, column, ddl_type in _ADDED_COLUMNS:
+        existing = {
+            row["name"]
+            for row in await conn.execute_fetchall(f"PRAGMA table_info({table})")
+        }
+        if column not in existing:
+            await conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
+            logger.info("🗄️  Migrated: added {}.{}", table, column)
 
 
 async def get_connection() -> aiosqlite.Connection:
@@ -108,6 +198,8 @@ async def init_db() -> None:
     conn = await get_connection()
     try:
         await conn.executescript(_SCHEMA_SQL)
+        await _migrate(conn)
+        await conn.executescript(_POST_MIGRATION_SQL)
         await conn.commit()
         logger.info("🗄️  Database initialised at '{}'", db_path)
     finally:

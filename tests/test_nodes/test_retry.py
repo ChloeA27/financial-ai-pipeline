@@ -24,7 +24,12 @@ def test_first_failure_spends_a_retry() -> None:
     assert upd["retry_count"] == 1
     assert "error" not in upd
     assert upd["correction_logs"] == [
-        {"cycle": 1, "error_summary": "boom", "raw_feedback": "report"}
+        {
+            "cycle": 1,
+            "error_summary": "boom",
+            "raw_feedback": "report",
+            "loop": "extract",
+        }
     ]
 
 

@@ -77,8 +77,8 @@ Traditional approaches (regex scraping, template-based parsers) fail because:
                    ┌──────────────────────────────────────────┐
                    │          BOUNDARY OF THIS PIPELINE        │
                    │                                          │
- raw_data/*.txt ──►│  Reader → Classifier → Extractor → Val.  │──► extractions (SCD2)
-                   │                    ↻ (self-correct)      │──► JSON files
+ raw_data/*.txt ──►│  Reader → Classifier → Class.Val. →      │──► extractions (SCD2)
+                   │  Extractor → Validator  ↻ (2 loops)      │──► JSON files
                    │                                          │──► dead_letter_queue
                    └──────────────────────────────────────────┘
                          │                           │
@@ -107,10 +107,16 @@ raw_data/*.txt
       │ raw_content
       ▼
  ┌──────────┐
- │Classifier│  LLM-as-Judge → doc_type {"M&A", "Dividend", …}
- │  Agent   │
+ │Classifier│  LLM → label {"M&A", "Dividend", "none", "unclear"}
+ │  Agent   │       + verbatim evidence_quote
  └────┬─────┘
-      │ doc_type
+      │ classification            ┌─ unparsable output / quote not in source
+      ▼                           │  → retry Classifier with feedback (own budget)
+ ┌────────────────┐               │
+ │ Classification │───────────────┘
+ │ Validator      │  plain code, no LLM
+ └────┬───────────┘
+      │ M&A / Dividend             none / unclear / budget spent → DLQ
       ▼
  ┌──────────┐    ┌─────────────────┐
  │ Extractor│◄───│ RAG Retriever   │  Semantic few-shot from
@@ -163,12 +169,17 @@ The pipeline is compiled as a `StateGraph` with `PipelineState` as its schema:
 workflow = StateGraph(state_schema=PipelineState)
 workflow.add_node("reader", reader_node)
 workflow.add_node("classifier", classifier_node)
+workflow.add_node("classification_validator", classification_validator_node)
 workflow.add_node("extractor", extractor_node)
 workflow.add_node("validator", validator_node)
 
 workflow.set_entry_point("reader")
 workflow.add_edge("reader", "classifier")     # linear forward
-workflow.add_edge("classifier", "extractor")
+
+# Classify loop: unparsable output / bad evidence quote → retry the Classifier
+workflow.add_conditional_edges("classifier", _route_after_classifier, {...})
+workflow.add_conditional_edges("classification_validator",
+                               _route_after_classification_validation, {...})
 
 # Self-correction edge #1: schema-parse failures retry without the Validator
 workflow.add_conditional_edges(
@@ -197,14 +208,18 @@ Defined as a `TypedDict` in `src/state/pipeline_state.py`:
 |-----|--------|------|-------------|
 | `file_path` | Reader | `str` | Absolute path to source `.txt` |
 | `raw_content` | Reader | `str` | Full raw text content |
-| `doc_type` | Classifier | `Optional[str]` | `"M&A"`, `"Dividend"`, `"Management_Change"` or `"Unknown"`. Only types registered in the Extractor have an extraction path; the rest end in the DLQ. |
+| `doc_type` | Classifier | `Optional[str]` | `"M&A"`, `"Dividend"`, `"none"` (clearly neither) or `"unclear"` (cannot decide). Only types registered in the Extractor have an extraction path; `none` / `unclear` end in the DLQ at the classification stage. `None` while no classification has been accepted. |
+| `classification` | Classifier | `Optional[dict]` | Latest classifier output: `label`, `evidence_quote`, `confidence`, `reasoning`. `confidence` is the model's self-report: logged only, never used for routing. |
+| `classification_passed` | Classifier / Classification Validator | `Optional[bool]` | `False` while a rejected classification is being retried |
+| `classify_retry_count` / `classify_max_retries` | Classification Validator / Reader | `int` | Classify-loop retries performed / budget (default 2) — separate from `retry_count` |
 | `extracted_data` | Extractor | `Optional[dict]` | Serialised Pydantic extraction result |
 | `validation_passed` | Validator | `Optional[bool]` | Quality gate pass/fail |
 | `validation_report` | Validator | `Optional[str]` | Detailed validation verdict |
-| `correction_logs` | Validator / Extractor | `list[CorrectionLog]` | Chronological history, one entry per failed attempt (`cycle` = 1-indexed attempt number) |
+| `correction_logs` | Classifier / Classification Validator / Validator / Extractor | `list[CorrectionLog]` | Chronological history, one entry per failed attempt. `loop` is `"classify"` or `"extract"`; `cycle` = 1-indexed attempt number *within that loop* |
 | `retry_count` | Validator / Extractor | `int` | Retries actually performed (0 on the first pass) |
 | `max_retries` | Reader | `int` | Retry budget (configurable, default 3): a document gets `max_retries + 1` extraction attempts in total |
 | `error` | Any node | `Optional[str]` | Fatal error message |
+| `failure` | Any node | `Optional[FailureInfo]` | Structured reason for a fatal exit: `stage`, `code`, `category`, `message`, optional `details`. Written to the DLQ columns. Not set for mid-loop retries. |
 
 > **Note:** RAG context is retrieved inside the Extractor Node — it is **not** stored in `PipelineState`. On the first pass the Extractor calls `await retrieve_context(doc_type, query_text, exclude_file_path=file_path)`, prepends the result to the user prompt, and discards it after generation. This keeps the state schema lean and avoids serialising embedding vectors through the graph.
 
@@ -221,6 +236,8 @@ Three exit paths:
 
 `retry_count` is the number of retries already *performed*, so with `max_retries = 3` a document is extracted at most four times (first attempt + 3 retries). The node that records the last allowed failure (`src/nodes/retry.py::register_failure`) leaves `retry_count` at `max_retries` and sets `error`, which is what sends the document to the DLQ. The router's own `retry_count > max_retries` check is only a defensive backstop.
 
+Two further routers cover the classify loop (`_route_after_classifier`, `_route_after_classification_validation`): an unparsable classification skips the Classification Validator and retries, a rejected one retries until `classify_retry_count > classify_max_retries`, and `none` / `unclear` (accepted but terminal, with `error` set) end the run. The classify and extract loops keep separate counters, so one cannot consume the other's budget.
+
 A second conditional edge sits **after the Extractor**: if the LLM's output does not even parse into the schema (bad enum, malformed date, out-of-range number, invalid JSON), the Extractor logs a correction cycle itself and the router sends it straight back for another attempt, skipping the Validator. Transport / API failures remain fatal.
 
 ---
@@ -229,7 +246,7 @@ A second conditional edge sits **after the Extractor**: if the LLM's output does
 
 ### 4.1 Motivation
 
-The LLM must **never** see pipeline-controlled fields (`doc_id`, `metadata`, `raw_text_snippet`). If it did, it could hallucinate or corrupt them. The Two-Model Protocol enforces a strict separation of concerns:
+The LLM must **never** see pipeline-controlled fields (`doc_id`, `metadata`). If it did, it could hallucinate or corrupt them. The Two-Model Protocol enforces a strict separation of concerns:
 
 ```
               ┌──────────────────┐
@@ -280,13 +297,15 @@ class Metadata(BaseModel):
     doc_type: str             # e.g. "M&A"
     pipeline_version: str     # e.g. "1.0.0"
     retry_count: int          # self-correction count
+    source_hash: str | None   # SHA-256 of the processed text → raw (bronze) layer
     extra: dict[str, Any]     # future-proof catch-all
 
 class BaseDoc(BaseModel):
     doc_id: str               # UUID4 hex — generated by pipeline, NOT the LLM
     metadata: Metadata        # embedded provenance object
-    raw_text_snippet: str     # first 500 chars for human-in-the-loop debugging
 ```
+
+The result no longer carries a 500-character `raw_text_snippet`: the full text is kept in the raw layer and `metadata.source_hash` points at it (see §8).
 
 ### 4.4 Promotion Bridge
 
@@ -296,7 +315,7 @@ Each concrete type implements a `from_extraction()` classmethod:
 class MandaExtractionResult(BaseDoc):
     @classmethod
     def from_extraction(cls, extraction: MandaExtraction, metadata: Metadata,
-                        raw_text_snippet: str = "", *, doc_id: str | None = None
+                        *, doc_id: str | None = None
     ) -> MandaExtractionResult: ...
 ```
 
@@ -308,7 +327,6 @@ real_doc_id = uuid.uuid4().hex
 final_result = result_model.from_extraction(
     extraction=llm_result,
     metadata=metadata,
-    raw_text_snippet=raw_content[:500],
     doc_id=real_doc_id,
 )
 ```
@@ -420,7 +438,7 @@ The `correction_logs` table captures every self-correction cycle:
 | `llm_raw_response` | The full validation report for that attempt (the `raw_feedback` field of the `CorrectionLog`; the LLM's own raw text is not stored) |
 | `created_at` | Timestamp of the correction event |
 
-> **Scope:** `correction_logs` rows are written only for documents that eventually pass validation (Branch A). A document that exhausts its retries goes to the DLQ with its final error and `retry_count`, but its per-cycle history is not persisted to the database (it is still included in the optional JSON output).
+> **Scope:** `correction_logs` rows (with a `loop` column: `classify` / `extract`) are written only for documents that eventually pass validation (Branch A). A document that exhausts a retry budget goes to the DLQ, where its per-cycle history is stored as JSON in `dead_letter_queue.correction_logs` instead (it is also included in the optional JSON output).
 
 ---
 
@@ -428,7 +446,7 @@ The `correction_logs` table captures every self-correction cycle:
 
 ### 7.1 Mechanism
 
-The self-correction loop is a **conditional edge** in LangGraph.
+There are two self-correction loops, both implemented as **conditional edges** in LangGraph. The *classify* loop (Classifier ↔ Classification Validator, budget `classify_max_retries`, default 2) is described in §9.3; the diagram below is the *extract* loop (Extractor ↔ Validator, budget `max_retries`, default 3).
 
 ```
 Validator Node
@@ -465,13 +483,28 @@ When the retry budget is spent (`max_retries` retries performed, default 3, and 
 
 ```python
 async def _insert_dead_letter(self, final_state: dict) -> None:
+    failure = final_state.get("failure") or fallback_failure(last_error)
     await conn.execute(
         "INSERT INTO dead_letter_queue "
-        "(file_path, source_hash, doc_type, last_error, retry_count, failed_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "(file_path, source_hash, doc_type, last_error, retry_count, "
+        "failed_stage, error_code, error_category, failure_details, "
+        "classification, correction_logs, failed_at) VALUES (...)",
         ...
     )
 ```
+
+Every DLQ row says **where** and **why** the document stopped:
+
+| Column | Meaning |
+|--------|---------|
+| `failed_stage` | `read`, `classify`, `classify_validate`, `extract`, `validate`, or `pipeline` (crash outside the graph, or an error with no `failure` record) |
+| `error_code` | Stable reason, e.g. `EVIDENCE_QUOTE_NOT_FOUND`, `CLASSIFICATION_UNCLEAR`, `UNSUPPORTED_DOC_TYPE`, `SCHEMA_PARSE_FAILED`, `LLM_CALL_FAILED`; for validator failures the most severe failed rule, e.g. `TARGET.NON_EMPTY`, `TIMELINE_ORDER` |
+| `error_category` | `transient`, `structure`, `reference`, `missing_info`, `business_rule`, `out_of_scope`, `ambiguous`, `input_error`, `unknown` |
+| `failure_details` | JSON: every failed rule / check of the last attempt |
+| `classification` | JSON: the classifier's last accepted output (label, evidence quote, self-reported confidence) |
+| `correction_logs` | JSON: the per-cycle correction history of both loops |
+
+`out_of_scope` (`none` label) and `ambiguous` (`unclear`) are expected outcomes, not malfunctions; keep them out of any "failure rate" numerator or report them separately. Rows written before this schema existed keep `NULL` in these columns; `init_db()` adds the columns to an old database file in place.
 
 DLQ documents are **never mixed** with core assets — the `dead_letter_queue` table is a separate cemetery for manual investigation.
 
@@ -483,15 +516,31 @@ There is one DLQ row per `(file_path, source_hash)`: re-running an unchanged fil
 
 ### 8.1 Dual-Write Strategy
 
-Each pipeline result is persisted in **two formats** simultaneously:
+Every run is persisted — passed **and** failed documents — in a medallion layout:
 
-1. **JSON File** — human-readable, git-friendly, directory listing
+| Layer | Content | Storage | Written for |
+|-------|---------|---------|-------------|
+| **Bronze (raw)** | Original file bytes, write-once, file name = SHA-256 of the bytes (`src/storage/raw_store.py`); registry table `documents` (size, encoding, first/last seen) | `data/raw/<sha256>.txt` (object storage later — only `raw_uri` changes) | every document |
+| **Silver (staging)** | `step_runs`: one row per node execution (stage, attempt, outcome, error code/category, parsed output, raw LLM reply, model, prompt version, tokens, latency); `dead_letter_queue`; `correction_logs` | SQLite | every document / every attempt |
+| **Gold (curated)** | `extractions`: validated results, SCD Type 2 | SQLite | passed documents only |
+
+Links between layers: `step_runs.run_id` groups one invocation; `source_hash` (in `step_runs`, `dead_letter_queue`, `extractions` and `metadata.source_hash`) points at the bronze object; `extractions.run_id` / `dead_letter_queue.run_id` point at the run that produced the row.
+
+> **Gold ≠ verified.** There is no LLM-as-judge yet; gold means *passed the deterministic validators*. `step_runs` is an **audit log**, not a LangGraph checkpointer: it is append-only and queryable with SQL, but it cannot resume a half-finished run.
+
+> **What the raw layer stores** is the source file's **bytes, unchanged** (encoding and line endings as they were); the key is the SHA-256 of those bytes, so it matches `sha256sum` of the original. The Reader stores them *before* decoding, then decodes for the LLM: UTF-8 (with or without BOM) → Windows-1252 fallback, line endings normalised to `\n`; the encoding used is recorded in `documents.encoding`. Bytes that cannot be decoded (or contain NUL, i.e. binary) are still stored, and the document goes to the DLQ with stage `read`, code `DECODE_FAILED` — it is no longer silently skipped.
+
+> **Persistence timing.** Nodes only *return* their `step_runs` records (an `operator.add` reducer on the state concatenates them); everything is written by the Repository after the graph finishes. A process killed mid-run therefore loses that run's records — acceptable for batch reruns, and the reason a checkpointer would be the next step if resumability were needed.
+
+Optional extra output:
+
+1. **JSON File** — human-readable, one per document (including its `step_runs`)
    - Writer: `src/storage/json_writer.py`
-   - Output path: `output/{filename}_result.json`
+   - Output path: `output/{filename}_result.json` (only with `--output`)
 
 2. **SQLite Database** — queryable, versioned, machine-parseable
    - Connection: `aiosqlite` with WAL mode
-   - Schema: `src/storage/db.py` (4 tables)
+   - Schema: `src/storage/db.py` (`documents`, `step_runs`, `extractions`, `correction_logs`, `dead_letter_queue`)
 
 ### 8.2 Database Schema
 
@@ -510,14 +559,40 @@ CREATE TABLE extractions (
     model_name      TEXT NOT NULL,
     retry_count     INTEGER NOT NULL DEFAULT 0,
     created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL
+    updated_at      TEXT NOT NULL,
+    run_id          TEXT                  -- run that produced this version
 );
 
--- Table 2: extraction_sources — Cold storage for raw text
-CREATE TABLE extraction_sources (
-    doc_id           TEXT NOT NULL PRIMARY KEY,
-    raw_text_snippet TEXT NOT NULL
+-- Table 2: documents — bronze registry (text itself in data/raw/<sha256>.txt)
+CREATE TABLE documents (
+    source_hash     TEXT PRIMARY KEY,
+    raw_uri         TEXT NOT NULL,
+    size_bytes      INTEGER NOT NULL,
+    encoding        TEXT,                 -- utf-8 | utf-8-bom | cp1252 | NULL
+    first_file_path TEXT NOT NULL,
+    first_seen_at   TEXT NOT NULL,
+    last_file_path  TEXT NOT NULL,
+    last_seen_at    TEXT NOT NULL,
+    last_run_id     TEXT,
+    last_status     TEXT                  -- 'stored' | 'dlq'
 );
+
+-- Table 5: step_runs — silver audit trail, one row per node execution
+CREATE TABLE step_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL, source_hash TEXT NOT NULL, file_path TEXT,
+    stage TEXT NOT NULL,        -- classify | classify_validate | extract | validate
+    loop TEXT NOT NULL,         -- classify | extract
+    attempt INTEGER NOT NULL,   -- 1-indexed within the loop
+    outcome TEXT NOT NULL,      -- passed | rejected | fatal
+    error_code TEXT, error_category TEXT,
+    output TEXT,                -- JSON: parsed output or validator verdict
+    model_name TEXT, prompt_version TEXT, raw_response TEXT,
+    prompt_tokens INTEGER, completion_tokens INTEGER, total_tokens INTEGER,
+    latency_ms INTEGER, started_at TEXT NOT NULL
+);
+-- (the former extraction_sources table — a 500-char snippet — is no longer
+--  created; old database files keep it, unused)
 
 -- Table 3: correction_logs — Self-correction audit trail
 CREATE TABLE correction_logs (
@@ -540,8 +615,16 @@ CREATE TABLE dead_letter_queue (
     doc_type        TEXT,
     last_error      TEXT NOT NULL,
     retry_count     INTEGER NOT NULL,
-    failed_at       TEXT NOT NULL
+    failed_at       TEXT NOT NULL,
+    failed_stage    TEXT,          -- where it stopped (see §7.3)
+    error_code      TEXT,          -- stable reason code
+    error_category  TEXT,          -- kind of problem
+    failure_details TEXT,          -- JSON
+    classification  TEXT,          -- JSON, classifier output
+    correction_logs TEXT           -- JSON, per-cycle history
 );
+-- plus: INDEX idx_dlq_stage_code ON dead_letter_queue(failed_stage, error_code)
+-- correction_logs also gained a `loop` column ('classify' | 'extract').
 ```
 
 ### 8.3 Repository Layer
@@ -555,11 +638,17 @@ class ExtractionRepository:
         if self._output_dir:
             await write_json_output(final_state, self._output_dir)
 
-        # Step 2: Route to correct branch
+        # Step 2: bronze — write-once copy of the source text
+        raw_uri = await store_raw(source_hash, final_state["raw_content"])
+
+        # Step 3: Route to correct branch
         if validated:
-            await self._upsert_extraction(final_state)    # Branch A
+            await self._upsert_extraction(final_state)    # Branch A (gold)
         else:
-            await self._insert_dead_letter(final_state)   # Branch B
+            await self._insert_dead_letter(final_state)   # Branch B (DLQ)
+
+        # Step 4: documents registry + every step_runs record of this run
+        await self._record_run(final_state, source_hash, raw_uri, status)
 ```
 
 ---
@@ -610,19 +699,43 @@ EXTRACTOR_PROMPTS: dict[str, str] = {
 
 ### 9.3 Classifier Compatibility
 
-The Classifier node (`src/nodes/classifier.py`) uses an LLM-as-Judge approach — it is **prompt-driven**, not code-driven. New doc types only need to be listed in the system prompt:
+The Classifier node (`src/nodes/classifier.py`) is **prompt-driven**. Its output is constrained to an enum (`Literal["M&A", "Dividend", "none", "unclear"]`) plus a verbatim `evidence_quote`; any other string fails Pydantic parsing and goes through the classify loop instead of silently reaching the Extractor.
 
 ```python
-SYSTEM_PROMPT = """... ONE of:
-- M&A               — Merger, acquisition, asset purchase, tender offer, etc.
-- Dividend          — Dividend declaration, distribution, payout ratio change.
-- Management_Change — Executive appointment/resignation, board changes, C-suite moves.
-- Unknown           — None of the above, or ambiguous."""
+SYSTEM_PROMPT = """... exactly ONE label:
+- "M&A"      — announces or reports an ACTUAL merger, acquisition, asset purchase or tender offer.
+- "Dividend" — announces or reports an ACTUAL dividend declaration or distribution.
+- "none"     — clearly neither (earnings, executive changes, buybacks, litigation, rumours / speculation).
+- "unclear"  — might be M&A or Dividend but cannot be decided (mixed events, truncated, contradictory)."""
 ```
+
+`none` and `unclear` are deliberately separate: `none` is an expected out-of-scope outcome, `unclear` means a human should look. `Management_Change` is **not** a label yet — those documents currently come back as `none` and can be given their own label (and extractor) later.
+
+To add a new document type: list it in the prompt, add it to the `DocLabel` literal and `SUPPORTED_DOC_TYPES` in `classifier.py`, and register it in the Extractor dictionaries. A unit test fails if `SUPPORTED_DOC_TYPES` and the Extractor registry drift apart.
+
+**Classification Validator** (`src/nodes/classification_validator.py`, plain code, no LLM) checks, for `M&A` / `Dividend`:
+1. *structure* — the label is one of the known labels;
+2. *reference* — `evidence_quote` is present, at least 25 characters and 4 words, and occurs **in the text the classifier was actually given** (`classifier_input`, not the whole file) after normalisation (case, whitespace, typographic quotes/dashes, surrounding ellipses). The same `normalise_text` function is used by the E1 scorer.
+
+Recorded with every check but never used to pass or reject: the quote's `offset` in the window, `longest_match_ratio` (longest contiguous overlap ÷ quote length — separates "copied with a typo" from "invented"), and `label_keyword_hit` (does the quote contain vocabulary of its label — a real quote can still be unrelated to the label, e.g. a historical deal mentioned in a dividend filing).
+
+**Classifier input selection** (`src/nodes/input_window.py`, plain code). Filings are long (E1 dev median ≈ 11.6k characters) and start with ≈ 2.3k characters of SEC cover page, while the event is often only described in an EX-99 press release. Strategy is a setting (`CLASSIFIER_INPUT_STRATEGY`):
+
+| Strategy | Window |
+|----------|--------|
+| `head` (V0, default) | first 4,000 characters — the original behaviour |
+| `structured` (V1) | cover page dropped (cut after the last "emerging growth company" check box, or the 6-K "Form 40-F" line — *not* at the first Item header, which would drop explanatory notes); then the start of every section (intro, each Item, each EX-99 exhibit; Item 9.01 header only) within a token budget (`CLASSIFIER_INPUT_TOKENS`, default 3,500 ≈ 14,000 characters), then extended in document order |
+| `keyword` (V2) | cover page dropped; the first third of the budget from the start of the text, then paragraphs containing M&A / dividend vocabulary |
+
+Each classifier `step_runs` record carries the window statistics (strategy, characters total / sent, sections, truncated) and the temperature, so a miss can be attributed to "evidence never in the window" versus "model saw it and judged wrongly". *Input coverage* — the share of gold evidence quotes inside the window — is computable without any LLM call (`scripts/eval_classification.py --coverage-only`).
+
+A failure writes the error type into the retry feedback and sends the document back to the Classifier (budget `classify_max_retries`, default 2 → three attempts in total). When the budget is spent the document goes to the DLQ with stage `classify_validate` and the code of the last failure. The Classifier's own `confidence` is stored but deliberately **not** used as a gate: it is a generated number, not a calibrated probability. The quote check only proves the quoted words exist in the document — it does not prove the label is right.
 
 ---
 
 ## 10. RAG-Augmented Extraction (Phase 2)
+
+> **Status: switched off by default** (`RAG_ENABLED=false` in `src/config.py`). When off, the Extractor does not call `retrieve_context()` and the Repository writes no vectors (the code and any existing collection are left as they are). Reason: in a batch run RAG feeds earlier documents' validated results to later ones as few-shot examples, so outcomes depend on processing order and concurrency — unacceptable while comparing variants. Each `step_runs` extract record carries `rag_context_used` so runs with and without RAG can be told apart. Its effect on accuracy has not been measured.
 
 ### 10.1 Motivation
 
@@ -774,9 +887,10 @@ The reported accuracy is `passed checks / total checks` pooled over all golden f
 
 Documents in `golden/expected_fail/` are known to contain corrupt/insufficient data. The evaluator only checks that the pipeline **legitimately rejected** the document:
 1. `validation_passed == False` (retries exhausted), or
-2. the Classifier succeeded but returned a type with no registered extractor (e.g. `Unknown`).
+2. the Classifier succeeded but labelled the document `none` / `unclear` (or any type with no registered extractor), or
+3. a classification or extraction loop ran out of retries on output that never passed validation.
 
-An infrastructure error (LLM unreachable, bad API key, unreadable file) scores **0** — it proves nothing about extraction quality.
+A failure whose `category` is `transient` (LLM unreachable, bad API key) or `input_error` (unreadable file, empty text) scores **0** — it proves nothing about extraction quality.
 
 Field-level comparison is skipped entirely.
 
@@ -880,14 +994,17 @@ financial-ai-pipeline/
 │   │   └── builder.py            ← LangGraph StateGraph construction
 │   │
 │   ├── state/
-│   │   └── pipeline_state.py     ← TypedDict state schema
+│   │   ├── pipeline_state.py     ← TypedDict state schema
+│   │   └── failure.py            ← DLQ failure vocabulary (stages, categories, codes)
 │   │
 │   ├── nodes/
 │   │   ├── reader.py             ← async file I/O
-│   │   ├── classifier.py         ← LLM-as-Judge doc type classification
+│   │   ├── classifier.py         ← LLM doc-type label + evidence quote
+│   │   ├── classification_validator.py ← code checks on the classification
 │   │   ├── extractor.py          ← LLM extraction + Registry
 │   │   ├── validator.py          ← Rule-based quality gate
-│   │   └── retry.py              ← Shared retry bookkeeping (Validator + Extractor)
+│   │   ├── retry.py              ← Shared retry bookkeeping (classify + extract loops)
+│   │   └── step_runs.py          ← per-execution audit records (silver layer)
 │   │
 │   ├── schemas/
 │   │   ├── base.py               ← Metadata + BaseDoc (foundation)
@@ -908,14 +1025,18 @@ financial-ai-pipeline/
 │   ├── llm/
 │   │   └── client.py             ← OpenAI-SDK client (DeepSeek-compatible) + JSON parsing
 │   │
+│   ├── utils/
+│   │   └── hashing.py            ← SHA-256 content hash (shared key)
+│   │
 │   └── storage/
 │       ├── __init__.py           ← Repository + init_db exports
-│       ├── db.py                 ← aiosqlite connection + schema DDL
+│       ├── db.py                 ← aiosqlite connection + schema DDL + migrations
+│       ├── raw_store.py          ← bronze: write-once content-addressed texts
 │       ├── json_writer.py        ← JSON file dual-write
-│       └── repository.py         ← SCD Type 2 upsert + Idempotency Guard
+│       └── repository.py         ← raw + gold/DLQ + step_runs persistence
 │
 ├── output/                       ← JSON dual-write artefacts
-├── data/                         ← SQLite database
+├── data/                         ← SQLite database + raw/ (bronze texts)
 ├── logs/                         ← Log output
 │
 ├── tests/

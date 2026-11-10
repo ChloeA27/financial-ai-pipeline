@@ -200,6 +200,21 @@ else:
                 {
                     "file_path": row.file_path,
                     "doc_type": row.doc_type,
+                    "failed_stage": (
+                        None
+                        if pd.isna(row.get("failed_stage"))
+                        else row.get("failed_stage")
+                    ),
+                    "error_code": (
+                        None
+                        if pd.isna(row.get("error_code"))
+                        else row.get("error_code")
+                    ),
+                    "error_category": (
+                        None
+                        if pd.isna(row.get("error_category"))
+                        else row.get("error_category")
+                    ),
                     "last_error": row.last_error,
                     "retry_count": row.retry_count,
                     "failed_at": row.failed_at,

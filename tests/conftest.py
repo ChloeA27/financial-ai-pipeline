@@ -59,6 +59,29 @@ def _isolated_vector_store(
 
 
 # ════════════════════════════════════════════════════════════════
+#  Raw-store isolation (applies to EVERY test)
+# ════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture(autouse=True)
+def _isolated_raw_store(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Keep every test away from the real ``data/raw`` directory."""
+    from src.config import settings
+
+    raw_dir = tmp_path / "raw"
+    monkeypatch.setattr(settings, "raw_store_path", str(raw_dir))
+    return raw_dir
+
+
+@pytest.fixture
+def rag_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    """RAG is off by default (``RAG_ENABLED=false``); opt in for RAG tests."""
+    from src.config import settings
+
+    monkeypatch.setattr(settings, "rag_enabled", True)
+
+
+# ════════════════════════════════════════════════════════════════
 #  Sample data fixtures
 # ════════════════════════════════════════════════════════════════
 

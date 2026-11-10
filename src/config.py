@@ -14,13 +14,26 @@ class Settings(BaseSettings):
     # ── Storage ──
     sqlite_db_path: str = "data/pipeline.db"
     chromadb_path: str = "data/chromadb"
+    raw_store_path: str = "data/raw"  # bronze layer: <sha256>.txt per source text
 
     # ── RAG ──
+    # Off by default: with RAG on, a batch run feeds earlier documents' results
+    # to later ones as few-shot examples, so results depend on processing order
+    # and concurrency. Keep it off while running evaluations.
+    rag_enabled: bool = False
     rag_top_k: int = 3
     rag_embedding_model: str = "all-MiniLM-L6-v2"
 
+    # ── Classifier ──
+    classifier_input_strategy: str = (
+        "head"  # head (V0) | structured (V1) | keyword (V2)
+    )
+    classifier_input_tokens: int = 3500  # budget for structured / keyword
+    classify_temperature: float = 0.05
+
     # ── Pipeline ──
-    max_retries: int = 3
+    max_retries: int = 3  # extraction self-correction budget
+    classify_max_retries: int = 2  # classification self-correction budget
     log_level: str = "INFO"
 
     model_config = SettingsConfigDict(

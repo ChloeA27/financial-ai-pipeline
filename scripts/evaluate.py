@@ -65,6 +65,9 @@ FIELD_TYPE_MAP: dict[str, str] = {
 
 NUMERIC_RELATIVE_TOLERANCE = 0.01  # 1%
 
+# Failure categories that say nothing about extraction quality.
+_INFRASTRUCTURE_CATEGORIES = {"transient", "input_error"}
+
 # Pipeline-controlled fields to strip from extracted_data
 _PIPELINE_FIELDS = {"doc_id", "metadata", "raw_text_snippet"}
 
@@ -197,8 +200,10 @@ def _run_pipeline_for(source_file: str, raw_data_dir: Path = RAW_DATA_DIR) -> di
         # Override DB paths so eval runs in complete isolation
         original_db = settings.sqlite_db_path
         original_chroma = settings.chromadb_path
+        original_raw = settings.raw_store_path
         settings.sqlite_db_path = str(Path(tmpdir) / "eval.db")
         settings.chromadb_path = str(Path(tmpdir) / "chromadb")
+        settings.raw_store_path = str(Path(tmpdir) / "raw")
 
         # Reset ChromaDB singleton so the next get_chroma_client() call
         # picks up the temp path. Same pattern used in test_rag.py fixtures.
@@ -213,6 +218,7 @@ def _run_pipeline_for(source_file: str, raw_data_dir: Path = RAW_DATA_DIR) -> di
             # Restore original settings
             settings.sqlite_db_path = original_db
             settings.chromadb_path = original_chroma
+            settings.raw_store_path = original_raw
             # Reset ChromaDB singleton back to the production path
             override_chroma_path(None)
 
@@ -273,14 +279,24 @@ def _is_legitimate_rejection(state: dict) -> bool:
     Legitimate rejections:
       - the Validator (or the Extractor's schema-parse loop) marked the
         document ``validation_passed=False`` after exhausting retries;
-      - the Classifier succeeded and labelled the document with a type the
-        pipeline has no extractor for (e.g. ``Unknown``).
+      - the Classifier succeeded and labelled the document ``none`` / ``unclear``
+        (or any type the pipeline has no extractor for);
+      - a classification or extraction loop ran out of retries on output that
+        never passed validation.
 
     Anything else carrying an ``error`` (LLM unreachable, bad API key,
     missing file, ...) is an infrastructure failure and proves nothing
     about extraction quality, so it must NOT earn credit.
     """
     if state.get("validation_passed") is False:
+        return True
+    failure = state.get("failure") or {}
+    if failure.get("category") in _INFRASTRUCTURE_CATEGORIES:
+        return False
+    if failure:
+        # Any other structured failure means the pipeline judged the document
+        # (out of scope, ambiguous, or the classifier/extractor output never
+        # passed validation) rather than hit an infrastructure problem.
         return True
     doc_type = state.get("doc_type")
     return doc_type is not None and doc_type not in EXTRACTOR_MODELS

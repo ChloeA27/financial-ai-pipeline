@@ -24,11 +24,13 @@ Financial institutions ingest hundreds of unstructured announcements daily — S
 
 This pipeline combines an LLM extraction step with a deterministic, self-correcting state machine (LangGraph) to produce structured, versioned, traceable extraction results from raw `.txt` announcements:
 
-- **Reader → Classifier → Extractor → Validator**, each an independent LangGraph node reading/writing a shared `PipelineState`
-- **Self-correction loop**: failed validations route back to the Extractor with structured feedback for a bounded number of retries (`max_retries` retries after the first attempt, covering both rule failures and LLM output that doesn't parse into the schema) before the document is quarantined to a Dead Letter Queue
+- **Reader → Classifier → Classification Validator → Extractor → Validator**, each an independent LangGraph node reading/writing a shared `PipelineState`. Only the Classifier and the Extractor call an LLM; the Reader and both validators are plain code
+- **Two self-correction loops, each with its own retry budget**: (1) *classify* — an unparsable label, or an evidence quote that does not occur in the source text, sends the document back to the Classifier with the error type as feedback (`classify_max_retries`, default 2); (2) *extract* — failed validations route back to the Extractor (`max_retries`, default 3), covering both rule failures and LLM output that doesn't parse into the schema. A document that spends a budget is quarantined to the Dead Letter Queue
+- **Classifier labels**: `M&A`, `Dividend`, `none` (clearly neither) and `unclear` (cannot decide). `none` / `unclear` end the document at the classification stage (DLQ codes `UNSUPPORTED_DOC_TYPE` / `CLASSIFICATION_UNCLEAR`) so no extraction is spent on them
+- **Stage-tagged Dead Letter Queue**: every DLQ row records `failed_stage`, `error_code` and `error_category` (plus the classifier output and the per-cycle correction history), so failures can be counted per stage instead of grepping error text
 - **Two-model data isolation**: the LLM only ever fills business fields (`MandaExtraction`, `DividendExtraction`); the pipeline itself owns provenance (`doc_id`, `Metadata`, audit trail) so the model can never corrupt controlled fields
 - **SHA-256 idempotency + SCD Type 2 versioning**: re-running on unchanged content is a no-op; re-running on an edited file archives the old version and inserts a new one — nothing is ever overwritten
-- **RAG-augmented extraction**: validated past extractions are embedded (SentenceTransformer, local) and stored in ChromaDB per document type, then retrieved as few-shot context on first-pass extraction
+- **RAG-augmented extraction**: validated past extractions are embedded (SentenceTransformer, local) and stored in ChromaDB per document type, then retrieved as few-shot context on first-pass extraction. **Off by default** (`RAG_ENABLED=false`): with RAG on, a batch run feeds earlier documents' results to later ones, so results depend on processing order — it stays off for evaluation, and its effect on accuracy has not been measured.
 - **CI golden-dataset gate**: every push runs the pipeline against hand-labelled golden files with a field-type-aware comparison engine (`enum`, `numeric` ±1 %, `bool`, `date`, `text_lower`; per-field overrides `date_range`, `fuzzy_match`, `accept_null`) and fails the build below an accuracy threshold
 
 Currently supports two document types (**M&A**, **Dividend**) via a registry pattern — adding a new type requires a new schema file and a few dict entries, no changes to graph topology or node logic.
@@ -48,10 +50,16 @@ raw_data/*.txt
       │ raw_content
       ▼
  ┌──────────┐
- │Classifier│  LLM-as-Judge → doc_type ("M&A" | "Dividend" | "Unknown")
- │  Agent   │
+ │Classifier│  LLM → label ("M&A" | "Dividend" | "none" | "unclear")
+ │  Agent   │       + verbatim evidence_quote
  └────┬─────┘
-      │ doc_type
+      │ classification            ┌─ unparsable output / quote not in source
+      ▼                           │  → retry Classifier with feedback (own budget)
+ ┌────────────────┐               │
+ │ Classification │───────────────┘
+ │ Validator      │  plain code, no LLM
+ └────┬───────────┘
+      │ M&A / Dividend             none / unclear / budget spent → DLQ
       ▼
  ┌──────────┐    ┌─────────────────┐
  │ Extractor│◄───│ RAG Retriever   │  Semantic few-shot from
@@ -77,7 +85,17 @@ raw_data/*.txt
                     └──────────┘
 ```
 
-Each validated result is written to a SQLite database (`data/pipeline.db`, 4 tables: `extractions`, `extraction_sources`, `correction_logs`, `dead_letter_queue`) with SCD Type 2 versioning on the `extractions` table. If `--output <dir>` is given, a JSON file per document is also written there (including failed ones).
+Every run is persisted in a medallion layout — passed **and** failed documents alike:
+
+| Layer | What | Where |
+|-------|------|-------|
+| Bronze (raw) | The original file **bytes**, stored before decoding, written once and never modified, named by their SHA-256 (matches `sha256sum`). Decoding: UTF-8 → Windows-1252 fallback (recorded); undecodable or binary files go to the DLQ as `read` / `DECODE_FAILED` instead of being skipped | `data/raw/<sha256>.txt` + `documents` table (registry: `raw_uri`, size, encoding, first/last seen, last run, last status) |
+| Silver (staging) | One `step_runs` row per node execution — every classifier / extractor call and every validation, passed, rejected or fatal: raw LLM reply, parsed output, verdict, error code, model, prompt version (hash of the exact system message), tokens, latency. Plus `dead_letter_queue` and `correction_logs` | `data/pipeline.db` |
+| Gold (curated) | Validated extractions only, SCD Type 2 versioned; each row carries `run_id` and `source_hash`, linking it to its step trail and its exact source text | `data/pipeline.db` → `extractions` |
+
+There is no LLM-as-judge yet, so "gold" means *passed the deterministic validators*, not *verified correct*. If `--output <dir>` is given, a JSON file per document (including its step trail) is also written there.
+
+Failure stages recorded in the DLQ: `read`, `classify`, `classify_validate`, `extract`, `validate` (and `pipeline` for a crash outside the graph). Categories: `transient`, `structure`, `reference`, `missing_info`, `business_rule`, `out_of_scope`, `ambiguous`, `input_error`, `unknown`. Older databases are migrated in place (`ALTER TABLE … ADD COLUMN`) the next time `init_db()` runs; rows written before the migration keep `NULL` in the new columns.
 
 **See [DOCS_SYSTEM_DESIGN.md](./DOCS_SYSTEM_DESIGN.md) for the full system design white paper**, including the state schema, the two-model isolation protocol, the idempotency guard implementation, RAG integration details, and the CI evaluation engine.
 
@@ -91,9 +109,11 @@ Each validated result is written to a SQLite database (`data/pipeline.db`, 4 tab
 | **Two-Model Isolation** | LLM-facing `BaseModel` (business fields only, all `Optional`) is promoted to a pipeline-owned `BaseDoc` (with `doc_id` + `Metadata`) via a `from_extraction()` classmethod — the LLM never touches provenance fields |
 | **Idempotent Persistence** | SHA-256 hash of raw file content is the true dedup key (not the per-run UUID `doc_id`) — re-running on unchanged content is a guaranteed no-op |
 | **Immutable Version History** | SCD Type 2 (`version` + `is_current` columns) — file edits archive the old row and insert a new version, never overwrite |
-| **Self-Correction Loop** | A conditional LangGraph edge routes failed validations back to the Extractor with the Validator's structured error feedback injected into the next prompt |
+| **Self-Correction Loops** | Conditional LangGraph edges route a rejected classification back to the Classifier and a failed extraction back to the Extractor, each with the validator's structured error feedback injected into the next prompt and each with an independent retry budget |
+| **Evidence-checked Classification** | The Classifier must return a verbatim `evidence_quote`; plain code checks that it occurs in the source text (whitespace-, case- and typographic-quote-insensitive). The model's self-reported `confidence` is logged but never used for routing |
+| **Stage-tagged DLQ** | Every fatal exit carries a `failure` record (stage, code, category); the DLQ stores it in columns together with the classifier output and the full correction history |
 | **Zero-Code Extension** | Adding a document type = 1 new schema file + 3 registry dict entries in `src/nodes/extractor.py` — no changes to graph topology or node logic (optional extras: validator rules, a RAG collection in `COLLECTION_MAP`, and `FIELD_TYPE_MAP` for the golden eval) |
-| **RAG-Augmented Extraction** | ChromaDB collection per document type; embeddings via local `SentenceTransformer` (`all-MiniLM-L6-v2`); only validated extractions are embedded; superseded versions are de-indexed and a file is never retrieved as its own example; first-pass extraction only (retries reuse the same context) |
+| **RAG-Augmented Extraction** | ChromaDB collection per document type; embeddings via local `SentenceTransformer` (`all-MiniLM-L6-v2`); only validated extractions are embedded; superseded versions are de-indexed and a file is never retrieved as its own example; first-pass extraction only (retries reuse the same context). Off by default (`RAG_ENABLED=false`) |
 | **Async Concurrency** | `asyncio.Semaphore` + `asyncio.gather` — batch mode runs each file's LangGraph state machine independently and concurrently |
 | **Operation Visibility** | Streamlit dashboard (`src/dashboard.py`) reads `data/pipeline.db` live for KPI cards, a Dead Letter panel, and per-`doc_id` self-correction audit drill-downs |
 | **CI Golden Dataset Gate** | `scripts/evaluate.py` runs the full pipeline against hand-labelled golden JSON files with a field-type-aware comparison engine, gating the build on a configurable accuracy threshold |
@@ -184,6 +204,28 @@ pytest -m "not integration" --tb=short -q
 python scripts/evaluate.py --threshold 0.85
 ```
 
+### Run the classification-stage evaluation (E1)
+
+Compares classifier input strategies on a frozen list of labelled SEC EDGAR filings (offline paired comparison; dataset kept outside this repo). The test split is refused until the prompt and input strategy are final.
+
+```bash
+# no LLM calls: is the gold evidence inside each strategy's window?
+python scripts/eval_classification.py --dataset <E1>/e1_dataset_draft.jsonl --coverage-only
+# no LLM calls: planned calls and tokens
+python scripts/eval_classification.py --dataset <E1>/e1_dataset_draft.jsonl --estimate
+# real run: head / structured / keyword, 2 repetitions, temperature 0
+python scripts/eval_classification.py --dataset <E1>/e1_dataset_draft.jsonl --reps 2 --max-calls 630
+```
+
+Browse a run (variant comparison, outcome funnel, per-document trace with the classifier's window and the model's evidence quote highlighted). Served on localhost only (`.streamlit/config.toml`); cases that are not human-verified are hidden in the trace unless you opt in:
+
+```bash
+pip install -r requirements-dashboard.txt
+streamlit run src/e1_dashboard.py
+```
+
+Results go to `results/e1/<UTC timestamp>_<tag>/` (`manifest.json` with dataset/input hashes, model, temperature, git commit; `summary.json`; per-case CSV). Gold labels are projected onto the two supported types (`mgmt_change`-only filings count as `none`). Per-case files never show draft labels of cases that are not yet human-verified.
+
 ---
 
 ## 📁 Project Structure
@@ -211,13 +253,16 @@ financial-ai-pipeline/
 │   │
 │   ├── graph/builder.py           ← LangGraph StateGraph construction
 │   ├── state/pipeline_state.py    ← TypedDict state schema
+│   ├── state/failure.py           ← DLQ failure vocabulary (stages, categories, codes)
 │   │
 │   ├── nodes/
 │   │   ├── reader.py               ← async file I/O + SHA-256 hashing
-│   │   ├── classifier.py           ← LLM-as-Judge doc type classification
+│   │   ├── classifier.py           ← LLM doc-type label + evidence quote
+│   │   ├── classification_validator.py ← code checks on the classification (no LLM)
 │   │   ├── extractor.py            ← LLM extraction + registry pattern
 │   │   ├── validator.py            ← rule-based quality gate
-│   │   └── retry.py                ← shared retry bookkeeping
+│   │   ├── retry.py                ← shared retry bookkeeping (classify + extract loops)
+│   │   └── step_runs.py            ← per-execution audit records
 │   │
 │   ├── schemas/
 │   │   ├── base.py                 ← Metadata + BaseDoc
@@ -226,10 +271,13 @@ financial-ai-pipeline/
 │   ├── rag/                        ← embedder, ChromaDB client, retriever
 │   ├── llm/client.py                ← OpenAI-SDK LLM client (DeepSeek-compatible)
 │   │
+│   ├── utils/hashing.py             ← SHA-256 content hash (shared key)
+│   │
 │   └── storage/
-│       ├── db.py                    ← aiosqlite schema DDL
+│       ├── db.py                    ← aiosqlite schema DDL + in-place migrations
+│       ├── raw_store.py             ← bronze: write-once content-addressed source texts
 │       ├── json_writer.py           ← JSON dual-write
-│       └── repository.py            ← SCD Type 2 upsert + idempotency guard
+│       └── repository.py            ← raw + gold/DLQ + step_runs persistence
 │
 └── tests/                          ← unit + integration tests
     ├── test_graph/  test_cli/  test_eval/  test_nodes/
