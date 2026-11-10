@@ -20,6 +20,7 @@ afterwards, in the Reader.
 from __future__ import annotations
 
 import os
+import uuid
 from pathlib import Path
 from typing import Union
 
@@ -50,12 +51,17 @@ async def store_raw(source_hash: str, data: Union[bytes, str]) -> str:
         return uri
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    # Unique per call: concurrent writers of the same content must not share
+    # a temporary file (they would rename it away from each other).
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     if isinstance(data, str):
         data = data.encode("utf-8")
     async with aiofiles.open(tmp, "wb") as fh:
         await fh.write(data)
-    os.replace(tmp, path)
+    if path.exists():  # another writer won the race; same hash => same bytes
+        tmp.unlink()
+    else:
+        os.replace(tmp, path)
     return uri
 
 

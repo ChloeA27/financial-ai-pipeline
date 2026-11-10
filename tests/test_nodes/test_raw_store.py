@@ -55,3 +55,20 @@ async def test_no_temporary_files_are_left_behind(_isolated_raw_store: Path) -> 
 
 def test_uri_is_derived_from_the_hash_only(_isolated_raw_store: Path) -> None:
     assert raw_uri_for("abc") == str(_isolated_raw_store / "abc.txt")
+
+
+async def test_concurrent_writers_of_the_same_content(
+    _isolated_raw_store: Path,
+) -> None:
+    import asyncio
+
+    text = "same announcement, stored by many tasks at once"
+    uris = await asyncio.gather(
+        *(store_raw(content_hash(text), text) for _ in range(25))
+    )
+
+    assert len(set(uris)) == 1
+    assert await read_raw(uris[0]) == text
+    assert [p.name for p in _isolated_raw_store.iterdir()] == [
+        f"{content_hash(text)}.txt"
+    ]
