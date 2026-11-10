@@ -1,0 +1,7 @@
+# Dashboards show evaluation details (and can reveal answers on blind cases):
+# serve them on this machine only.
+[server]
+address = "localhost"
+
+[browser]
+gatherUsageStats = false

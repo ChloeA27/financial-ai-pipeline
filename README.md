@@ -217,6 +217,13 @@ python scripts/eval_classification.py --dataset <E1>/e1_dataset_draft.jsonl --es
 python scripts/eval_classification.py --dataset <E1>/e1_dataset_draft.jsonl --reps 2 --max-calls 630
 ```
 
+Browse a run (variant comparison, outcome funnel, per-document trace with the classifier's window and the model's evidence quote highlighted). Served on localhost only (`.streamlit/config.toml`); cases that are not human-verified are hidden in the trace unless you opt in:
+
+```bash
+pip install -r requirements-dashboard.txt
+streamlit run src/e1_dashboard.py
+```
+
 Results go to `results/e1/<UTC timestamp>_<tag>/` (`manifest.json` with dataset/input hashes, model, temperature, git commit; `summary.json`; per-case CSV). Gold labels are projected onto the two supported types (`mgmt_change`-only filings count as `none`). Per-case files never show draft labels of cases that are not yet human-verified.
 
 ---
