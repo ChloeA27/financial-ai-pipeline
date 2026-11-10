@@ -235,3 +235,25 @@ class TestPersistedAuditTrail:
         assert doc["last_run_id"] == second["run_id"]
         runs = await _rows("SELECT DISTINCT run_id FROM step_runs")
         assert {r["run_id"] for r in runs} == {first["run_id"], second["run_id"]}
+
+
+class TestClassificationOnlyGraph:
+    async def test_accepted_label_ends_before_extraction(self, scripted) -> None:
+        from src.graph.builder import build_classification_graph
+        from src.nodes.reader import read_single_file
+
+        fake, path = scripted
+        fake.queue = [BAD_QUOTE, CLASSIFY, GOOD]
+        final = await build_classification_graph().ainvoke(await read_single_file(path))
+
+        assert final["classification_passed"] is True
+        assert final["doc_type"] == "M&A"
+        assert final.get("extracted_data") is None
+        assert fake.queue == [GOOD]  # the extractor was never called
+        assert [s["stage"] for s in final["step_runs"]] == [
+            "classify",
+            "classify_validate",
+            "classify",
+            "classify_validate",
+        ]
+        assert final["step_runs"][0]["output"]["input"]["strategy"] == "head"

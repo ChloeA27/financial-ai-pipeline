@@ -99,6 +99,21 @@ class ExtractionRepository:
         # ── Step 4: Register the document and append the run's step records ──
         await self._record_run(final_state, source_hash, raw_uri, status)
 
+    async def save_steps_only(self, final_state: dict, status: str) -> None:
+        """
+        Persist bronze + ``step_runs`` without gold / DLQ routing.
+
+        For stage-level evaluations (e.g. classification only, E1): the run
+        never reaches extraction, so writing it to the DLQ would be wrong.
+        """
+        raw_uri = final_state.get("raw_uri")
+        source_hash = final_state.get("source_hash")
+        if not (raw_uri and source_hash and Path(raw_uri).exists()):
+            data = final_state.get("raw_content", "").encode("utf-8")
+            source_hash = content_hash(data)
+            raw_uri = await store_raw(source_hash, data)
+        await self._record_run(final_state, source_hash, raw_uri, status)
+
     # ────────────────────────────────────────────────────────────────
     #  Bronze registry + silver step audit
     # ────────────────────────────────────────────────────────────────

@@ -221,6 +221,36 @@ def build_pipeline() -> StateGraph:
     return graph
 
 
+def build_classification_graph():
+    """
+    The classification stage alone: Reader → Classifier ⇄ Classification
+    Validator → END.  Same nodes and the same routers as the full pipeline
+    (an accepted M&A / Dividend label ends the run instead of moving on to
+    the Extractor), so E1 evaluates the real classification code path.
+    """
+    workflow = StateGraph(state_schema=PipelineState)
+    workflow.add_node("reader", reader_node)
+    workflow.add_node("classifier", classifier_node)
+    workflow.add_node("classification_validator", classification_validator_node)
+    workflow.set_entry_point("reader")
+    workflow.add_edge("reader", "classifier")
+    workflow.add_conditional_edges(
+        source="classifier",
+        path=_route_after_classifier,
+        path_map={
+            "classification_validator": "classification_validator",
+            "classifier": "classifier",
+            END: END,
+        },
+    )
+    workflow.add_conditional_edges(
+        source="classification_validator",
+        path=_route_after_classification_validation,
+        path_map={"extractor": END, "classifier": "classifier", END: END},
+    )
+    return workflow.compile()
+
+
 # ── Convenience runner ──
 
 

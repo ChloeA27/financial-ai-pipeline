@@ -715,7 +715,19 @@ To add a new document type: list it in the prompt, add it to the `DocLabel` lite
 
 **Classification Validator** (`src/nodes/classification_validator.py`, plain code, no LLM) checks, for `M&A` / `Dividend`:
 1. *structure* — the label is one of the known labels;
-2. *reference* — `evidence_quote` is present, at least 10 characters, and occurs in the source text after normalisation (case, whitespace, typographic quotes/dashes, surrounding ellipses).
+2. *reference* — `evidence_quote` is present, at least 25 characters and 4 words, and occurs **in the text the classifier was actually given** (`classifier_input`, not the whole file) after normalisation (case, whitespace, typographic quotes/dashes, surrounding ellipses). The same `normalise_text` function is used by the E1 scorer.
+
+Recorded with every check but never used to pass or reject: the quote's `offset` in the window, `longest_match_ratio` (longest contiguous overlap ÷ quote length — separates "copied with a typo" from "invented"), and `label_keyword_hit` (does the quote contain vocabulary of its label — a real quote can still be unrelated to the label, e.g. a historical deal mentioned in a dividend filing).
+
+**Classifier input selection** (`src/nodes/input_window.py`, plain code). Filings are long (E1 dev median ≈ 11.6k characters) and start with ≈ 2.3k characters of SEC cover page, while the event is often only described in an EX-99 press release. Strategy is a setting (`CLASSIFIER_INPUT_STRATEGY`):
+
+| Strategy | Window |
+|----------|--------|
+| `head` (V0, default) | first 4,000 characters — the original behaviour |
+| `structured` (V1) | cover page dropped (cut after the last "emerging growth company" check box, or the 6-K "Form 40-F" line — *not* at the first Item header, which would drop explanatory notes); then the start of every section (intro, each Item, each EX-99 exhibit; Item 9.01 header only) within a token budget (`CLASSIFIER_INPUT_TOKENS`, default 3,500 ≈ 14,000 characters), then extended in document order |
+| `keyword` (V2) | cover page dropped; the first third of the budget from the start of the text, then paragraphs containing M&A / dividend vocabulary |
+
+Each classifier `step_runs` record carries the window statistics (strategy, characters total / sent, sections, truncated) and the temperature, so a miss can be attributed to "evidence never in the window" versus "model saw it and judged wrongly". *Input coverage* — the share of gold evidence quotes inside the window — is computable without any LLM call (`scripts/eval_classification.py --coverage-only`).
 
 A failure writes the error type into the retry feedback and sends the document back to the Classifier (budget `classify_max_retries`, default 2 → three attempts in total). When the budget is spent the document goes to the DLQ with stage `classify_validate` and the code of the last failure. The Classifier's own `confidence` is stored but deliberately **not** used as a gate: it is a generated number, not a calibrated probability. The quote check only proves the quoted words exist in the document — it does not prove the label is right.
 

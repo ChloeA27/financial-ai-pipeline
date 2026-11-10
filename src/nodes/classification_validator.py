@@ -7,9 +7,19 @@ so failures can be attributed to the classification stage.
 
 Checks (on a label that has an extraction path, i.e. M&A / Dividend):
   1. structure  — the label is one of the known labels
-  2. reference  — ``evidence_quote`` is present, long enough, and occurs
-                  verbatim (modulo whitespace, case and typographic quotes) in
-                  the source text
+  2. reference  — ``evidence_quote`` is present, long enough (>= 25 characters
+                  and >= 4 words), and occurs verbatim (modulo whitespace, case
+                  and typographic quotes) in the text the classifier was
+                  actually given (``classifier_input``) — not the whole file
+
+Diagnostics recorded on every check (never used to pass or reject):
+  * ``offset``               where the quote sits in the window (for highlighting
+                             and as an anchor for later stages)
+  * ``longest_match_ratio``  longest contiguous overlap with the window / quote
+                             length — separates "copied with a typo" from
+                             "invented"
+  * ``label_keyword_hit``    whether the quote contains vocabulary of its label
+                             (a quote can exist and still not support the label)
 
 Outcomes:
   - checks fail            → classify self-correction loop (error type is
@@ -27,7 +37,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Optional
+from difflib import SequenceMatcher
+from typing import Any, Optional
 
 from src.config import settings
 from src.nodes.classifier import (
@@ -62,8 +73,17 @@ from src.state.failure import (
 )
 from src.state.pipeline_state import PipelineState
 
-# A quote shorter than this is too easy to match by accident.
-MIN_QUOTE_CHARS = 10
+# A quote shorter than this is too easy to match by accident ("the Merger").
+MIN_QUOTE_CHARS = 25
+MIN_QUOTE_WORDS = 4
+
+_LABEL_KEYWORDS = {
+    "M&A": re.compile(
+        r"merg|acqui|combination|tender offer|divest|dispos|spin-?off|purchase",
+        re.IGNORECASE,
+    ),
+    "Dividend": re.compile(r"dividend|distribution", re.IGNORECASE),
+}
 
 _TYPOGRAPHY = str.maketrans(
     {
@@ -96,6 +116,29 @@ def quote_in_source(quote: str, source: str) -> bool:
     return bool(cleaned) and cleaned in normalise_text(source)
 
 
+def quote_diagnostics(quote: str, source: str, label: Optional[str]) -> dict[str, Any]:
+    """Where / how well the quote matches the window (diagnostics only)."""
+    cleaned = _clean_quote(quote or "")
+    window = normalise_text(source)
+    offset = window.find(cleaned) if cleaned else -1
+    ratio = 0.0
+    if cleaned:
+        if offset >= 0:
+            ratio = 1.0
+        else:
+            m = SequenceMatcher(
+                None, window, cleaned, autojunk=False
+            ).find_longest_match(0, len(window), 0, len(cleaned))
+            ratio = round(m.size / len(cleaned), 3)
+    pattern = _LABEL_KEYWORDS.get(label or "")
+    return {
+        "found": offset >= 0,
+        "offset": offset if offset >= 0 else None,
+        "longest_match_ratio": ratio,
+        "label_keyword_hit": bool(pattern.search(cleaned)) if pattern else None,
+    }
+
+
 # ── Individual checks: each returns (code, category, message) or None ──
 
 
@@ -118,12 +161,12 @@ def _check_quote(quote: str, source: str) -> Optional[tuple[str, str, str]]:
             "[STRUCTURE] evidence_quote is empty but the label requires a "
             "verbatim quote from the document.",
         )
-    if len(cleaned) < MIN_QUOTE_CHARS:
+    if len(cleaned) < MIN_QUOTE_CHARS or len(cleaned.split()) < MIN_QUOTE_WORDS:
         return (
             EVIDENCE_QUOTE_TOO_SHORT,
             CAT_STRUCTURE,
             f"[STRUCTURE] evidence_quote is shorter than {MIN_QUOTE_CHARS} "
-            "characters; quote a longer passage.",
+            f"characters / {MIN_QUOTE_WORDS} words; quote the whole sentence.",
         )
     if cleaned not in normalise_text(source):
         shown = quote if len(quote) <= 80 else quote[:77] + "..."
@@ -131,7 +174,7 @@ def _check_quote(quote: str, source: str) -> Optional[tuple[str, str, str]]:
             EVIDENCE_QUOTE_NOT_FOUND,
             CAT_REFERENCE,
             f"[REFERENCE] evidence_quote {shown!r} does not occur verbatim in "
-            "the document. Copy the exact words, do not paraphrase.",
+            "the text you were given. Copy the exact words, do not paraphrase.",
         )
     return None
 
@@ -165,25 +208,29 @@ async def classification_validator_node(state: PipelineState) -> dict:
         )
 
     label = classification.get("label")
+    quote = classification.get("evidence_quote", "")
+    # The quote must come from what the model actually saw.
+    window = state.get("classifier_input") or state.get("raw_content", "")
+    diagnostics = quote_diagnostics(quote, window, label) if quote else None
     problems: list[tuple[str, str, str]] = []
 
     label_problem = _check_label(label)
     if label_problem:
         problems.append(label_problem)
     elif label in SUPPORTED_DOC_TYPES:
-        quote_problem = _check_quote(
-            classification.get("evidence_quote", ""), state.get("raw_content", "")
-        )
+        quote_problem = _check_quote(quote, window)
         if quote_problem:
             problems.append(quote_problem)
 
     if problems:
-        return _reject(state, problems)
+        return _reject(state, problems, diagnostics)
 
-    return _accept(state, label)
+    return _accept(state, label, diagnostics)
 
 
-def _accept(state: PipelineState, label: str) -> dict:
+def _accept(
+    state: PipelineState, label: str, diagnostics: Optional[dict] = None
+) -> dict:
     """Classification is acceptable; terminal labels end the document here."""
     attempt = current_attempt(state, LOOP_CLASSIFY)
     if label in (OUT_OF_SCOPE_LABEL, UNCLEAR_LABEL):
@@ -212,7 +259,7 @@ def _accept(state: PipelineState, label: str) -> dict:
                     state,
                     attempt,
                     OUTCOME_FATAL,
-                    output={"label": label, "checks": []},
+                    output={"label": label, "checks": [], "quote": diagnostics},
                     failure=failure,
                 )
             ],
@@ -224,13 +271,21 @@ def _accept(state: PipelineState, label: str) -> dict:
                 state,
                 attempt,
                 OUTCOME_PASSED,
-                output={"label": label, "checks": ["label", "evidence_quote"]},
+                output={
+                    "label": label,
+                    "checks": ["label", "evidence_quote"],
+                    "quote": diagnostics,
+                },
             )
         ],
     }
 
 
-def _reject(state: PipelineState, problems: list[tuple[str, str, str]]) -> dict:
+def _reject(
+    state: PipelineState,
+    problems: list[tuple[str, str, str]],
+    diagnostics: Optional[dict] = None,
+) -> dict:
     """Spend one classify retry (or give up) and describe what was wrong."""
     attempt = current_attempt(state, LOOP_CLASSIFY)
     code, category, _ = problems[0]
@@ -263,7 +318,7 @@ def _reject(state: PipelineState, problems: list[tuple[str, str, str]]) -> dict:
             state,
             attempt,
             outcome_of(update),
-            output={"failures": failures},
+            output={"failures": failures, "quote": diagnostics},
             error_code=code,
             error_category=category,
         )

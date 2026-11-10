@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS documents (
     last_file_path      TEXT NOT NULL,
     last_seen_at        TEXT NOT NULL,
     last_run_id         TEXT,
-    last_status         TEXT            -- 'stored' (gold) | 'dlq'
+    last_status         TEXT            -- 'stored' (gold) | 'dlq' | stage-eval status
 );
 
 -- Table 5: step_runs — silver audit trail, one row per node execution

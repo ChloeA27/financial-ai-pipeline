@@ -199,3 +199,45 @@ class TestTerminalLabels:
         update = await classification_validator_node(_state(label, quote=""))
         assert update["classification_passed"] is True
         assert "classify_retry_count" not in update
+
+
+class TestQuoteScopeAndDiagnostics:
+    async def test_quote_must_come_from_the_text_the_model_saw(self) -> None:
+        # The quote exists in the file, but not in the window that was sent.
+        state = _state(quote=GOOD_QUOTE, classifier_input="Cover page only, no event.")
+        update = await classification_validator_node(state)
+        assert update["classification_passed"] is False
+        assert "[REFERENCE]" in update["correction_logs"][0]["error_summary"]
+
+    async def test_without_a_recorded_window_the_raw_text_is_used(self) -> None:
+        update = await classification_validator_node(_state(quote=GOOD_QUOTE))
+        assert update["classification_passed"] is True
+
+    async def test_three_words_are_too_short_even_if_long_enough(self) -> None:
+        state = _state(quote="Microsoft Corp. today", raw_content=SOURCE * 2)
+        update = await classification_validator_node(state)
+        assert "shorter than" in update["correction_logs"][0]["error_summary"]
+
+    async def test_diagnostics_are_recorded_on_acceptance(self) -> None:
+        update = await classification_validator_node(_state(quote=GOOD_QUOTE))
+        diag = update["step_runs"][0]["output"]["quote"]
+        assert diag["found"] is True
+        assert diag["offset"] is not None
+        assert diag["longest_match_ratio"] == 1.0
+        assert diag["label_keyword_hit"] is True  # "acquire"
+
+    async def test_near_miss_is_measured_but_still_rejected(self) -> None:
+        typo = "reached a definitive agreement to acquire Activision Blizard"
+        update = await classification_validator_node(_state(quote=typo))
+        diag = update["step_runs"][0]["output"]["quote"]
+        assert update["classification_passed"] is False
+        assert diag["found"] is False
+        assert 0.8 < diag["longest_match_ratio"] < 1.0
+
+    async def test_keyword_signal_flags_an_unrelated_quote_without_rejecting(
+        self,
+    ) -> None:
+        quote = "The “deal” is subject to regulatory review"
+        update = await classification_validator_node(_state("Dividend", quote))
+        assert update["classification_passed"] is True
+        assert update["step_runs"][0]["output"]["quote"]["label_keyword_hit"] is False

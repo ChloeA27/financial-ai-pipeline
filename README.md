@@ -204,6 +204,21 @@ pytest -m "not integration" --tb=short -q
 python scripts/evaluate.py --threshold 0.85
 ```
 
+### Run the classification-stage evaluation (E1)
+
+Compares classifier input strategies on a frozen list of labelled SEC EDGAR filings (offline paired comparison; dataset kept outside this repo). The test split is refused until the prompt and input strategy are final.
+
+```bash
+# no LLM calls: is the gold evidence inside each strategy's window?
+python scripts/eval_classification.py --dataset <E1>/e1_dataset_draft.jsonl --coverage-only
+# no LLM calls: planned calls and tokens
+python scripts/eval_classification.py --dataset <E1>/e1_dataset_draft.jsonl --estimate
+# real run: head / structured / keyword, 2 repetitions, temperature 0
+python scripts/eval_classification.py --dataset <E1>/e1_dataset_draft.jsonl --reps 2 --max-calls 630
+```
+
+Results go to `results/e1/<UTC timestamp>_<tag>/` (`manifest.json` with dataset/input hashes, model, temperature, git commit; `summary.json`; per-case CSV). Gold labels are projected onto the two supported types (`mgmt_change`-only filings count as `none`). Per-case files never show draft labels of cases that are not yet human-verified.
+
 ---
 
 ## 📁 Project Structure

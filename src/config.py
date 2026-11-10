@@ -24,6 +24,13 @@ class Settings(BaseSettings):
     rag_top_k: int = 3
     rag_embedding_model: str = "all-MiniLM-L6-v2"
 
+    # ── Classifier ──
+    classifier_input_strategy: str = (
+        "head"  # head (V0) | structured (V1) | keyword (V2)
+    )
+    classifier_input_tokens: int = 3500  # budget for structured / keyword
+    classify_temperature: float = 0.05
+
     # ── Pipeline ──
     max_retries: int = 3  # extraction self-correction budget
     classify_max_retries: int = 2  # classification self-correction budget

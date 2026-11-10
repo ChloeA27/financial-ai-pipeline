@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from src.config import settings
 from src.llm.client import LLMCallInfo, LLMClient
+from src.nodes.input_window import build_input
 from src.nodes.step_runs import (
     OUTCOME_FATAL,
     OUTCOME_PASSED,
@@ -59,8 +60,6 @@ OUT_OF_SCOPE_LABEL = "none"
 UNCLEAR_LABEL = "unclear"
 ALL_LABELS: tuple[str, ...] = SUPPORTED_DOC_TYPES + (OUT_OF_SCOPE_LABEL, UNCLEAR_LABEL)
 
-CLASSIFIER_INPUT_CHARS = 4000
-
 
 # ── Structured output schema for the LLM ──
 
@@ -78,7 +77,7 @@ class ClassificationResult(BaseModel):
         default="",
         max_length=400,
         description=(
-            "Verbatim quote (10-300 characters) copied from the document that "
+            "Verbatim sentence (25-300 characters) copied from the document that "
             "justifies the label. Required for 'M&A' and 'Dividend'; empty for "
             "'none' and 'unclear'."
         ),
@@ -107,7 +106,7 @@ Assign the announcement to exactly ONE label:
 - "unclear"  — the document may be M&A or Dividend but you cannot decide: e.g. it mixes several events, is truncated, or contradicts itself.
 
 Also return:
-- evidence_quote: for "M&A" and "Dividend", ONE verbatim quote of 10-300 characters copied exactly from the document (same words, same order, no paraphrasing, no added ellipses) that shows the event. For "none" and "unclear" use "".
+- evidence_quote: for "M&A" and "Dividend", ONE verbatim sentence of 25-300 characters copied exactly from the document (same words, same order, no paraphrasing, no added ellipses) that shows the event. For "none" and "unclear" use "".
 - confidence: a number between 0 and 1.
 - reasoning: one short sentence.
 
@@ -147,10 +146,14 @@ async def classifier_node(state: PipelineState) -> dict:
             "step_runs": [_step(state, attempt, OUTCOME_FATAL, failure=failure)],
         }
 
-    user_prompt = (
-        "Classify the following announcement:\n\n"
-        f"{raw_content[:CLASSIFIER_INPUT_CHARS]}"
+    window = build_input(
+        raw_content,
+        strategy=settings.classifier_input_strategy,
+        budget_tokens=settings.classifier_input_tokens,
     )
+    temperature = settings.classify_temperature
+    call_info = {**window.stats(), "temperature": temperature}
+    user_prompt = f"Classify the following announcement:\n\n{window.text}"
     feedback = _build_classification_feedback(state)
     if feedback:
         user_prompt += (
@@ -164,12 +167,15 @@ async def classifier_node(state: PipelineState) -> dict:
             system_prompt=SYSTEM_PROMPT,
             user_prompt=user_prompt,
             response_model=ClassificationResult,
-            temperature=0.05,  # near-deterministic for classification
+            temperature=temperature,
             max_tokens=1024,
         )
     except ValidationError as exc:
         # The LLM answered, but not in the required shape — retry with feedback.
-        return _parse_failure_update(state, exc, attempt, client.last_call)
+        update = _parse_failure_update(state, exc, attempt, client.last_call)
+        update["classifier_input"] = window.text
+        update["step_runs"][0]["output"]["input"] = call_info
+        return update
     except Exception as exc:
         message = f"classifier_node: LLM call failed — {exc}"
         failure = make_failure(STAGE_CLASSIFY, LLM_CALL_FAILED, CAT_TRANSIENT, message)
@@ -181,6 +187,7 @@ async def classifier_node(state: PipelineState) -> dict:
                     state,
                     attempt,
                     OUTCOME_FATAL,
+                    output={"input": call_info},
                     failure=failure,
                     llm_call=client.last_call,
                 )
@@ -198,6 +205,7 @@ async def classifier_node(state: PipelineState) -> dict:
     return {
         "doc_type": result.doc_type,
         "classification": classification,
+        "classifier_input": window.text,
         # Reset so a stale False from a rejected attempt cannot reroute us.
         "classification_passed": None,
         "step_runs": [
@@ -205,7 +213,7 @@ async def classifier_node(state: PipelineState) -> dict:
                 state,
                 attempt,
                 OUTCOME_PASSED,
-                output=classification,
+                output={**classification, "input": call_info},
                 llm_call=client.last_call,
             )
         ],

@@ -134,6 +134,9 @@ class PipelineState(TypedDict):
     logging only — it is never used to route documents.
     """
 
+    classifier_input: Optional[str]
+    """The exact text the classifier was given (the evidence quote must come from it)."""
+
     classification_passed: Optional[bool]
     """False while the latest classification was rejected and is being retried."""
 
