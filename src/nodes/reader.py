@@ -8,12 +8,21 @@ and sends it into the graph for classification + extraction.
 from __future__ import annotations
 
 import os
+import uuid
 from pathlib import Path
 
 import aiofiles
 
 from src.config import settings
+from src.state.failure import (
+    CAT_INPUT_ERROR,
+    FILE_NOT_FOUND,
+    NO_FILE_PATH,
+    STAGE_READ,
+    make_failure,
+)
 from src.state.pipeline_state import PipelineState
+from src.utils.hashing import content_hash
 
 
 def _init_pipeline_state(file_path: str, raw_content: str) -> PipelineState:
@@ -21,7 +30,13 @@ def _init_pipeline_state(file_path: str, raw_content: str) -> PipelineState:
     return PipelineState(
         file_path=file_path,
         raw_content=raw_content,
+        source_hash=content_hash(raw_content),
+        run_id=uuid.uuid4().hex,
         doc_type=None,
+        classification=None,
+        classification_passed=None,
+        classify_retry_count=0,
+        classify_max_retries=settings.classify_max_retries,
         extracted_data=None,
         validation_passed=None,
         validation_report=None,
@@ -29,6 +44,8 @@ def _init_pipeline_state(file_path: str, raw_content: str) -> PipelineState:
         retry_count=0,
         max_retries=settings.max_retries,
         error=None,
+        failure=None,
+        step_runs=[],
     )
 
 
@@ -120,7 +137,11 @@ async def reader_node(state: PipelineState) -> dict:
 
     file_path = state.get("file_path", "")
     if not file_path:
-        return {"error": "reader_node: no file_path in state"}
+        message = "reader_node: no file_path in state"
+        return {
+            "error": message,
+            "failure": make_failure(STAGE_READ, NO_FILE_PATH, CAT_INPUT_ERROR, message),
+        }
 
     try:
         new_state = await read_single_file(file_path)
@@ -129,4 +150,10 @@ async def reader_node(state: PipelineState) -> dict:
             "raw_content": new_state["raw_content"],
         }
     except FileNotFoundError as exc:
-        return {"error": f"reader_node: {exc}"}
+        message = f"reader_node: {exc}"
+        return {
+            "error": message,
+            "failure": make_failure(
+                STAGE_READ, FILE_NOT_FOUND, CAT_INPUT_ERROR, message
+            ),
+        }

@@ -65,6 +65,9 @@ FIELD_TYPE_MAP: dict[str, str] = {
 
 NUMERIC_RELATIVE_TOLERANCE = 0.01  # 1%
 
+# Failure categories that say nothing about extraction quality.
+_INFRASTRUCTURE_CATEGORIES = {"transient", "input_error"}
+
 # Pipeline-controlled fields to strip from extracted_data
 _PIPELINE_FIELDS = {"doc_id", "metadata", "raw_text_snippet"}
 
@@ -273,14 +276,24 @@ def _is_legitimate_rejection(state: dict) -> bool:
     Legitimate rejections:
       - the Validator (or the Extractor's schema-parse loop) marked the
         document ``validation_passed=False`` after exhausting retries;
-      - the Classifier succeeded and labelled the document with a type the
-        pipeline has no extractor for (e.g. ``Unknown``).
+      - the Classifier succeeded and labelled the document ``none`` / ``unclear``
+        (or any type the pipeline has no extractor for);
+      - a classification or extraction loop ran out of retries on output that
+        never passed validation.
 
     Anything else carrying an ``error`` (LLM unreachable, bad API key,
     missing file, ...) is an infrastructure failure and proves nothing
     about extraction quality, so it must NOT earn credit.
     """
     if state.get("validation_passed") is False:
+        return True
+    failure = state.get("failure") or {}
+    if failure.get("category") in _INFRASTRUCTURE_CATEGORIES:
+        return False
+    if failure:
+        # Any other structured failure means the pipeline judged the document
+        # (out of scope, ambiguous, or the classifier/extractor output never
+        # passed validation) rather than hit an infrastructure problem.
         return True
     doc_type = state.get("doc_type")
     return doc_type is not None and doc_type not in EXTRACTOR_MODELS

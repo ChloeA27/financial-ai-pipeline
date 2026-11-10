@@ -149,7 +149,6 @@ class DividendExtractionResult(BaseDoc, ProfileValidatorMixin):
         cls,
         extraction: DividendExtraction,
         metadata: Metadata,
-        raw_text_snippet: str = "",
         *,
         doc_id: str | None = None,
     ) -> DividendExtractionResult:
@@ -157,7 +156,6 @@ class DividendExtractionResult(BaseDoc, ProfileValidatorMixin):
         return cls(
             doc_id=doc_id if doc_id else uuid.uuid4().hex,
             metadata=metadata,
-            raw_text_snippet=raw_text_snippet,
             ticker=extraction.ticker,
             declaration_date=extraction.declaration_date,
             dividend_cash_amount=extraction.dividend_cash_amount,

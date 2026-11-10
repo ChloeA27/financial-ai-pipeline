@@ -222,14 +222,13 @@ class TestDividendTwoModelProtocol:
         result = DividendExtractionResult.from_extraction(
             extraction=extraction,
             metadata=metadata,
-            raw_text_snippet="Apple Inc. declares dividend...",
             doc_id="test-doc-id-123",
         )
         assert result.doc_id == "test-doc-id-123"
         assert result.metadata.source_path == "/test/apple.txt"
         assert result.ticker == "AAPL"
         assert result.dividend_cash_amount == 0.52
-        assert result.raw_text_snippet == "Apple Inc. declares dividend..."
+        assert not hasattr(result, "raw_text_snippet")  # full text lives in raw store
 
     def test_promotion_generates_doc_id(self) -> None:
         """If no doc_id provided, from_extraction should generate one."""
@@ -287,7 +286,6 @@ class TestMandaTwoModelProtocol:
         result = MandaExtractionResult.from_extraction(
             extraction=extraction,
             metadata=metadata,
-            raw_text_snippet="Microsoft to acquire Activision...",
             doc_id="test-ma-doc-id",
         )
         assert result.doc_id == "test-ma-doc-id"
@@ -381,3 +379,17 @@ class TestMakeAllowedValidator:
 
         with pytest.raises(ValidationError, match="not in allowed set"):
             CustomModel(fruits="Durian")
+
+
+class TestMetadataLinksToRawLayer:
+    def test_source_hash_is_optional_and_kept(self) -> None:
+        from src.schemas.base import Metadata
+
+        assert (
+            Metadata(source_path="/x", model_name="m", doc_type="M&A").source_hash
+            is None
+        )
+        meta = Metadata(
+            source_path="/x", model_name="m", doc_type="M&A", source_hash="ab" * 32
+        )
+        assert meta.source_hash == "ab" * 32

@@ -37,12 +37,18 @@ async def write_json_output(state: dict, output_dir: str) -> None:
     output_data = {
         "doc_id": (state.get("extracted_data") or {}).get("doc_id"),
         "file_path": state.get("file_path"),
+        "run_id": state.get("run_id"),
+        "source_hash": state.get("source_hash"),
         "doc_type": state.get("doc_type"),
+        "classification": state.get("classification"),
         "validation_passed": state.get("validation_passed"),
         "retry_count": state.get("retry_count"),
+        "classify_retry_count": state.get("classify_retry_count"),
         "correction_logs": state.get("correction_logs"),
         "extracted_data": state.get("extracted_data"),
         "error": state.get("error"),
+        "failure": state.get("failure"),
+        "step_runs": state.get("step_runs"),
     }
 
     async with aiofiles.open(output_file, "w", encoding="utf-8") as fh:

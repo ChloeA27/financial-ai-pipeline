@@ -18,7 +18,23 @@ from __future__ import annotations
 
 from typing import Any
 
-from src.nodes.retry import register_failure
+from src.nodes.retry import LOOP_EXTRACT, register_failure
+from src.nodes.step_runs import (
+    OUTCOME_FATAL,
+    OUTCOME_PASSED,
+    current_attempt,
+    make_step_run,
+    outcome_of,
+)
+from src.state.failure import (
+    CAT_BUSINESS_RULE,
+    CAT_MISSING_INFO,
+    CAT_STRUCTURE,
+    CAT_UNKNOWN,
+    NO_EXTRACTED_DATA,
+    STAGE_VALIDATE,
+    make_failure,
+)
 from src.state.pipeline_state import PipelineState
 
 
@@ -441,6 +457,63 @@ def _run_rule(rule: dict[str, Any], data: dict[str, Any]) -> tuple[bool, str]:
 
 
 # ====================================================================
+#  Failure attribution — turn a failed rule into (code, category)
+# ====================================================================
+
+_SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+
+# Rules whose ``check`` compares several fields: their code is the check name.
+_CROSS_FIELD_CHECKS = {
+    "not_equal",
+    "timeline_order",
+    "amount_requires_currency",
+    "not_all_empty",
+}
+
+
+def _rule_code(rule: dict[str, Any]) -> str:
+    """Stable machine-readable code for a failed rule, e.g. ``TARGET.NON_EMPTY``."""
+    check = rule["check"].upper()
+    if rule["check"] in _CROSS_FIELD_CHECKS:
+        return check
+    return f"{rule['field'].upper()}.{check}"
+
+
+def _rule_category(rule: dict[str, Any], data: dict[str, Any]) -> str:
+    """
+    business_rule  — a cross-field rule was violated
+    missing_info   — the checked value is absent
+    structure      — the value is present but malformed / out of range / not allowed
+    """
+    if rule["check"] in _CROSS_FIELD_CHECKS:
+        return CAT_BUSINESS_RULE
+    value = data.get(rule["field"])
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return CAT_MISSING_INFO
+    return CAT_STRUCTURE
+
+
+def _describe_failures(
+    failed_rules: list[dict[str, Any]], data: dict[str, Any]
+) -> tuple[str, str, list[dict[str, str]]]:
+    """
+    Primary (code, category) plus a record of every failed rule.
+
+    The primary failure is the most severe one (ties: first in rule order).
+    """
+    entries = [
+        {
+            "code": _rule_code(rule),
+            "category": _rule_category(rule, data),
+            "severity": rule["severity"],
+        }
+        for rule in failed_rules
+    ]
+    primary = min(entries, key=lambda e: _SEVERITY_ORDER.get(e["severity"], 99))
+    return primary["code"], primary["category"], entries
+
+
+# ====================================================================
 #  Node function
 # ====================================================================
 
@@ -465,12 +538,17 @@ async def validator_node(state: PipelineState) -> dict:
     if state.get("error"):
         return {}
 
+    attempt = current_attempt(state, LOOP_EXTRACT)
     extracted_data: dict[str, Any] | None = state.get("extracted_data")
     if not extracted_data:
+        message = "validator_node: no extracted_data found in state."
+        failure = make_failure(STAGE_VALIDATE, NO_EXTRACTED_DATA, CAT_UNKNOWN, message)
         return {
             "validation_passed": False,
-            "validation_report": ("validator_node: no extracted_data found in state."),
-            "error": "validator_node: no extracted_data found in state.",
+            "validation_report": message,
+            "error": message,
+            "failure": failure,
+            "step_runs": [_step(state, attempt, OUTCOME_FATAL, failure=failure)],
         }
 
     # ── Resolve rules for this doc_type ──
@@ -480,20 +558,25 @@ async def validator_node(state: PipelineState) -> dict:
     # No rules registered for this type → pass silently
     # (Pydantic schema already enforces structural validity)
     if rules is None:
+        report = (
+            f"No validation rules registered for '{doc_type}' — passing by default."
+        )
         return {
             "validation_passed": True,
-            "validation_report": (
-                f"No validation rules registered for '{doc_type}' — "
-                "passing by default."
-            ),
+            "validation_report": report,
+            "step_runs": [
+                _step(state, attempt, OUTCOME_PASSED, output={"report": report})
+            ],
         }
 
     # ── Run all validation rules ──
     errors: list[str] = []
+    failed_rules: list[dict[str, Any]] = []
     for rule in rules:
         passed, err_msg = _run_rule(rule, extracted_data)
         if not passed:
             errors.append(err_msg)
+            failed_rules.append(rule)
 
     # ── Assemble report ──
     if not errors:
@@ -509,19 +592,60 @@ async def validator_node(state: PipelineState) -> dict:
         "validation_report": report,
     }
 
+    if new_validation_passed:
+        updates["step_runs"] = [
+            _step(
+                state,
+                attempt,
+                OUTCOME_PASSED,
+                output={"report": report, "rules_checked": len(rules)},
+            )
+        ]
+
     if not new_validation_passed:
         # ── Self-correction: log the failure, spend one retry (or give up) ──
         max_retries = state.get("max_retries", 3)
+        exhausted = (
+            f"validator_node: max retries ({max_retries}) exhausted. "
+            f"Document failed all correction cycles."
+        )
+        code, category, entries = _describe_failures(failed_rules, extracted_data)
         updates.update(
             register_failure(
                 state,
                 error_summary="; ".join(errors),
                 report=report,
-                exhausted_message=(
-                    f"validator_node: max retries ({max_retries}) exhausted. "
-                    f"Document failed all correction cycles."
+                exhausted_message=exhausted,
+                failure=make_failure(
+                    STAGE_VALIDATE,
+                    code,
+                    category,
+                    exhausted,
+                    details={"failed_rules": entries},
                 ),
             )
         )
+        updates["step_runs"] = [
+            _step(
+                state,
+                attempt,
+                outcome_of(updates),
+                output={"report": report, "failed_rules": entries},
+                error_code=code,
+                error_category=category,
+            )
+        ]
 
     return updates
+
+
+def _step(state: PipelineState, attempt: int, outcome: str, **kw) -> dict:
+    """Audit record for one validation run (no LLM involved)."""
+    return make_step_run(
+        state,
+        stage=STAGE_VALIDATE,
+        loop=LOOP_EXTRACT,
+        attempt=attempt,
+        outcome=outcome,
+        **kw,
+    )

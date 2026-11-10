@@ -3,17 +3,42 @@ LLM client — OpenAI-compatible wrapper for DeepSeek / Ollama / any OpenAI prox
 
 DeepSeek does NOT support the ``response_format`` parameter, so we use
 regular text generation + manual JSON parsing with Pydantic validation.
+
+Every call records ``last_call`` (raw reply text, token usage, latency, and a
+hash of the exact system message) *before* the reply is parsed, so the audit
+trail keeps what the model said even when its output fails validation.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
-from typing import Any
+import time
+from typing import Any, Optional
 
 from openai import AsyncOpenAI
+from typing_extensions import TypedDict
 
 from src.config import settings
+
+
+class LLMCallInfo(TypedDict):
+    """What one chat-completion call cost and returned (before parsing)."""
+
+    model_name: str
+    prompt_version: str
+    """``sha256:<12 hex>`` of the full system message actually sent."""
+    raw_response: str
+    prompt_tokens: Optional[int]
+    completion_tokens: Optional[int]
+    total_tokens: Optional[int]
+    latency_ms: int
+
+
+def prompt_fingerprint(system_message: str) -> str:
+    """Short, stable id of a system message: changes whenever the prompt or schema does."""
+    return "sha256:" + hashlib.sha256(system_message.encode("utf-8")).hexdigest()[:12]
 
 
 class LLMClient:
@@ -25,6 +50,41 @@ class LLMClient:
             base_url=settings.deepseek_base_url,
         )
         self._model = settings.deepseek_model
+        self.last_call: Optional[LLMCallInfo] = None
+        """Info about the most recent call; ``None`` if it never got a reply."""
+
+    async def _chat(
+        self,
+        system_message: str,
+        user_prompt: str,
+        *,
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        """Send one chat completion, record ``last_call`` and return the raw text."""
+        self.last_call = None
+        started = time.perf_counter()
+        response = await self._client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        raw_text = response.choices[0].message.content or ""
+        usage = getattr(response, "usage", None)
+        self.last_call = LLMCallInfo(
+            model_name=self._model,
+            prompt_version=prompt_fingerprint(system_message),
+            raw_response=raw_text,
+            prompt_tokens=getattr(usage, "prompt_tokens", None),
+            completion_tokens=getattr(usage, "completion_tokens", None),
+            total_tokens=getattr(usage, "total_tokens", None),
+            latency_ms=int((time.perf_counter() - started) * 1000),
+        )
+        return raw_text
 
     async def generate(
         self,
@@ -46,16 +106,9 @@ class LLMClient:
         Returns:
             The LLM's response text content.
         """
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=temperature,
-            max_tokens=max_tokens,
+        return await self._chat(
+            system_prompt, user_prompt, temperature=temperature, max_tokens=max_tokens
         )
-        return response.choices[0].message.content or ""
 
     async def generate_structured(
         self,
@@ -90,25 +143,15 @@ class LLMClient:
         # Augment system prompt with JSON schema hint
         schema_hint = _build_schema_hint(response_model)
 
-        response = await self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        f"{system_prompt}\n\n"
-                        "You MUST respond with valid JSON only, no markdown fences, "
-                        "no code blocks, no explanations. The JSON must conform to "
-                        f"this schema:\n\n{schema_hint}"
-                    ),
-                },
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=temperature,
-            max_tokens=max_tokens,
+        system_message = (
+            f"{system_prompt}\n\n"
+            "You MUST respond with valid JSON only, no markdown fences, "
+            "no code blocks, no explanations. The JSON must conform to "
+            f"this schema:\n\n{schema_hint}"
         )
-
-        raw_text = response.choices[0].message.content or ""
+        raw_text = await self._chat(
+            system_message, user_prompt, temperature=temperature, max_tokens=max_tokens
+        )
 
         # Clean the response — strip markdown JSON fences if present
         cleaned = _extract_json(raw_text)

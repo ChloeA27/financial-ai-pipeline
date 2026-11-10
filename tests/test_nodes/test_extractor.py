@@ -172,3 +172,81 @@ class TestSuccessAndOtherErrors:
         update = await extractor_node(_state())
         assert "LLM call failed" in update["error"]
         assert "retry_count" not in update
+
+
+class TestFailureRecords:
+    """Fatal extractor exits carry a structured failure for the DLQ."""
+
+    async def test_transport_failure_is_transient(self, fake_llm: type[FakeOpenAI]):
+        fake_llm.queue = []
+        update = await extractor_node(_state())
+        assert update["failure"]["stage"] == "extract"
+        assert update["failure"]["code"] == "LLM_CALL_FAILED"
+        assert update["failure"]["category"] == "transient"
+
+    async def test_exhausted_schema_parsing_is_a_structure_failure(
+        self, fake_llm: type[FakeOpenAI]
+    ):
+        fake_llm.queue = [json.dumps({"payment_method": "cash"})]
+        prior = [
+            {"cycle": i, "error_summary": "x", "raw_feedback": "x"} for i in (1, 2, 3)
+        ]
+        update = await extractor_node(
+            _state(retry_count=3, max_retries=3, correction_logs=prior)
+        )
+        assert update["failure"]["stage"] == "extract"
+        assert update["failure"]["code"] == "SCHEMA_PARSE_FAILED"
+        assert update["failure"]["category"] == "structure"
+
+    async def test_mid_loop_parse_failure_has_no_failure_record(
+        self, fake_llm: type[FakeOpenAI]
+    ):
+        fake_llm.queue = [json.dumps({"payment_method": "cash"})]
+        update = await extractor_node(_state())
+        assert "failure" not in update
+
+    @pytest.mark.parametrize("doc_type", ["none", "unclear", "Management_Change"])
+    async def test_type_without_extractor_is_out_of_scope(
+        self, fake_llm: type[FakeOpenAI], doc_type: str
+    ):
+        update = await extractor_node(_state(doc_type=doc_type))
+        assert update["failure"]["code"] == "UNSUPPORTED_DOC_TYPE"
+        assert update["failure"]["category"] == "out_of_scope"
+        assert fake_llm.calls == []
+
+    async def test_empty_document(self, fake_llm: type[FakeOpenAI]):
+        update = await extractor_node(_state(raw_content=" "))
+        assert update["failure"]["code"] == "EMPTY_DOCUMENT"
+        assert update["failure"]["category"] == "input_error"
+
+
+class TestRagSwitch:
+    async def test_retriever_is_not_called_when_rag_is_off(
+        self, fake_llm: type[FakeOpenAI], monkeypatch: pytest.MonkeyPatch
+    ):
+        calls: list = []
+
+        async def spy(**kw: Any) -> str:
+            calls.append(kw)
+            return "SHOULD NOT APPEAR"
+
+        monkeypatch.setattr(extractor_module, "retrieve_context", spy)
+        fake_llm.queue = [GOOD]
+        update = await extractor_node(_state())
+
+        assert calls == []
+        assert "SHOULD NOT APPEAR" not in fake_llm.calls[-1][-1]["content"]
+        assert update["step_runs"][0]["output"]["rag_context_used"] is False
+
+    async def test_retriever_is_used_when_rag_is_on(
+        self, fake_llm: type[FakeOpenAI], monkeypatch: pytest.MonkeyPatch, rag_on: None
+    ):
+        async def ctx(**_: Any) -> str:
+            return "HISTORICAL EXAMPLE"
+
+        monkeypatch.setattr(extractor_module, "retrieve_context", ctx)
+        fake_llm.queue = [GOOD]
+        update = await extractor_node(_state())
+
+        assert "HISTORICAL EXAMPLE" in fake_llm.calls[-1][-1]["content"]
+        assert update["step_runs"][0]["output"]["rag_context_used"] is True

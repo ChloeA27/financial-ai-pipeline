@@ -2,7 +2,11 @@
 Repository — the "estate manager" for all persistence operations.
 
 Provides a single high-level method ``save_extraction(final_state)``
-that coordinates dual-write (JSON + SQLite) with intelligent routing:
+that persists one pipeline run, for passed AND failed documents alike:
+
+  1. bronze — the source text is written once to the raw store
+     (``<raw_store_path>/<sha256>.txt``) and registered in ``documents``;
+  2. gold / DLQ routing:
 
   ✅ Passed validation  → **Branch A**: Idempotent Upsert (SCD Type 2)
                           If ``source_hash`` changed, the old row is archived
@@ -10,20 +14,26 @@ that coordinates dual-write (JSON + SQLite) with intelligent routing:
   ❌ Failed / exhausted → **Branch B**: Clean write to dead_letter_queue (DLQ);
                           one row per (file_path, source_hash), refreshed on
                           repeated failures of the same content.
+
+  3. silver — every ``step_runs`` record of the run (each LLM call and each
+     validation, with its outcome) is appended to ``step_runs``.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from loguru import logger
 
+from src.config import settings
 from src.rag.repository import delete_from_vector_store, save_to_vector_store
+from src.state.failure import fallback_failure
 from src.storage.db import get_connection
+from src.storage.raw_store import store_raw
+from src.utils.hashing import content_hash
 from src.storage.json_writer import write_json_output
 
 
@@ -32,14 +42,14 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _hash_content(raw_content: str) -> str:
-    """Return SHA-256 hex digest of the raw source text."""
-    return hashlib.sha256(raw_content.encode("utf-8")).hexdigest()
+_hash_content = content_hash  # kept for existing imports
 
 
-def _strip_raw_text(extracted: dict[str, Any]) -> dict[str, Any]:
-    """Remove ``raw_text_snippet`` from extracted data for clean business storage."""
-    return {k: v for k, v in extracted.items() if k != "raw_text_snippet"}
+def _source_hash(final_state: dict) -> str:
+    """The run's content hash (computed by the Reader; recomputed if absent)."""
+    return final_state.get("source_hash") or content_hash(
+        final_state.get("raw_content", "")
+    )
 
 
 class ExtractionRepository:
@@ -60,19 +70,94 @@ class ExtractionRepository:
     # ────────────────────────────────────────────────────────────────
 
     async def save_extraction(self, final_state: dict) -> None:
-        """Persist a pipeline result — dual-write JSON + SQLite."""
+        """Persist one pipeline run: raw text, gold-or-DLQ row, step audit trail."""
         # ── Step 1: Always write the debug JSON file ──
         if self._output_dir:
             await write_json_output(final_state, self._output_dir)
 
-        # ── Step 2: Route to the correct persistence branch ──
+        # ── Step 2: Bronze — keep the exact source text, passed or failed ──
+        source_hash = _source_hash(final_state)
+        raw_uri = await store_raw(source_hash, final_state.get("raw_content", ""))
+
+        # ── Step 3: Route to the correct persistence branch ──
         validation_passed = final_state.get("validation_passed") is True
         has_error = bool(final_state.get("error"))
 
         if validation_passed and not has_error:
             await self._upsert_extraction(final_state)
+            status = "stored"
         else:
             await self._insert_dead_letter(final_state)
+            status = "dlq"
+
+        # ── Step 4: Register the document and append the run's step records ──
+        await self._record_run(final_state, source_hash, raw_uri, status)
+
+    # ────────────────────────────────────────────────────────────────
+    #  Bronze registry + silver step audit
+    # ────────────────────────────────────────────────────────────────
+
+    async def _record_run(
+        self, final_state: dict, source_hash: str, raw_uri: str, status: str
+    ) -> None:
+        """Upsert ``documents`` and insert every ``step_runs`` record of the run."""
+        file_path = final_state.get("file_path", "")
+        run_id = final_state.get("run_id") or None
+        now = _now()
+        conn = await get_connection()
+        try:
+            await conn.execute(
+                "INSERT INTO documents (source_hash, raw_uri, size_chars, "
+                "first_file_path, first_seen_at, last_file_path, last_seen_at, "
+                "last_run_id, last_status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(source_hash) DO UPDATE SET "
+                "last_file_path = excluded.last_file_path, "
+                "last_seen_at = excluded.last_seen_at, "
+                "last_run_id = excluded.last_run_id, "
+                "last_status = excluded.last_status",
+                (
+                    source_hash,
+                    raw_uri,
+                    len(final_state.get("raw_content", "")),
+                    file_path,
+                    now,
+                    file_path,
+                    now,
+                    run_id,
+                    status,
+                ),
+            )
+            for step in final_state.get("step_runs") or []:
+                await conn.execute(
+                    "INSERT INTO step_runs (run_id, source_hash, file_path, stage, "
+                    "loop, attempt, outcome, error_code, error_category, output, "
+                    "model_name, prompt_version, raw_response, prompt_tokens, "
+                    "completion_tokens, total_tokens, latency_ms, started_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        step.get("run_id") or run_id or "",
+                        step.get("source_hash") or source_hash,
+                        step.get("file_path") or file_path,
+                        step["stage"],
+                        step["loop"],
+                        step["attempt"],
+                        step["outcome"],
+                        step.get("error_code"),
+                        step.get("error_category"),
+                        _to_json(step.get("output")),
+                        step.get("model_name"),
+                        step.get("prompt_version"),
+                        step.get("raw_response"),
+                        step.get("prompt_tokens"),
+                        step.get("completion_tokens"),
+                        step.get("total_tokens"),
+                        step.get("latency_ms"),
+                        step.get("started_at") or now,
+                    ),
+                )
+            await conn.commit()
+        finally:
+            await conn.close()
 
     # ────────────────────────────────────────────────────────────────
     #  Branch A — Idempotent Upsert (SCD Type 2)
@@ -100,13 +185,12 @@ class ExtractionRepository:
         extracted = final_state.get("extracted_data") or {}
         doc_id = extracted.get("doc_id", "")
         file_path = final_state.get("file_path", "")
-        raw_content = final_state.get("raw_content", "")
-        source_hash = _hash_content(raw_content)
+        source_hash = _source_hash(final_state)
         doc_type = final_state.get("doc_type", "")
         retry_count = final_state.get("retry_count", 0)
+        run_id = final_state.get("run_id") or None
 
-        # Clean business data (strip raw_text_snippet)
-        business_data = _strip_raw_text(extracted)
+        business_data = extracted
 
         conn = await get_connection()
         try:
@@ -165,8 +249,8 @@ class ExtractionRepository:
                 INSERT INTO extractions
                     (doc_id, file_path, source_hash, doc_type, extracted_data,
                      version, is_current, pipeline_version, model_name,
-                     retry_count, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+                     retry_count, created_at, updated_at, run_id)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     doc_id,
@@ -180,15 +264,8 @@ class ExtractionRepository:
                     retry_count,
                     now,
                     now,
+                    run_id,
                 ),
-            )
-
-            # ── Write raw text snippet to extraction_sources ──
-            snippet = extracted.get("raw_text_snippet", "")[:500]
-            await conn.execute(
-                "INSERT OR REPLACE INTO extraction_sources (doc_id, raw_text_snippet) "
-                "VALUES (?, ?)",
-                (doc_id, snippet),
             )
 
             # ── Write correction_logs if any ──
@@ -196,14 +273,15 @@ class ExtractionRepository:
             for log in correction_logs:
                 await conn.execute(
                     "INSERT INTO correction_logs "
-                    "(doc_id, cycle, error_summary, llm_raw_response, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
+                    "(doc_id, cycle, error_summary, llm_raw_response, created_at, "
+                    "loop) VALUES (?, ?, ?, ?, ?, ?)",
                     (
                         doc_id,
                         log.get("cycle", 0),
                         log.get("error_summary", ""),
                         log.get("raw_feedback"),
                         now,
+                        log.get("loop", "extract"),
                     ),
                 )
 
@@ -217,10 +295,11 @@ class ExtractionRepository:
                 doc_type,
             )
 
-            # ── Write validated extraction to vector store (RAG) ──
-            await save_to_vector_store(extracted)
-            if superseded is not None and superseded[0] != doc_id:
-                await delete_from_vector_store(*superseded)
+            # ── Write validated extraction to vector store (RAG, if enabled) ──
+            if settings.rag_enabled:
+                await save_to_vector_store(extracted)
+                if superseded is not None and superseded[0] != doc_id:
+                    await delete_from_vector_store(*superseded)
 
         finally:
             await conn.close()
@@ -230,13 +309,24 @@ class ExtractionRepository:
     # ────────────────────────────────────────────────────────────────
 
     async def _insert_dead_letter(self, final_state: dict) -> None:
-        """Write a failed document to the dead_letter_queue."""
+        """
+        Write a failed document to the dead_letter_queue.
+
+        The row says *where* (``failed_stage``) and *why* (``error_code``,
+        ``error_category``) the document stopped, and keeps the classifier
+        output and the per-cycle correction history, which are otherwise lost
+        for documents that never reach the ``extractions`` table.
+        """
         file_path = final_state.get("file_path", "")
-        raw_content = final_state.get("raw_content", "")
-        source_hash = _hash_content(raw_content)
+        source_hash = _source_hash(final_state)
         doc_type = final_state.get("doc_type")
-        last_error = final_state.get("error", "Unknown error")
+        last_error = final_state.get("error") or "Unknown error"
         retry_count = final_state.get("retry_count", 0)
+
+        failure = final_state.get("failure") or fallback_failure(last_error)
+        failure_details = _to_json(failure.get("details"))
+        classification = _to_json(final_state.get("classification"))
+        correction_logs = _to_json(final_state.get("correction_logs") or [])
 
         conn = await get_connection()
         try:
@@ -248,27 +338,52 @@ class ExtractionRepository:
                 "WHERE file_path = ? AND source_hash = ?",
                 (file_path, source_hash),
             )
+            columns = (
+                doc_type,
+                last_error,
+                retry_count,
+                failure["stage"],
+                failure["code"],
+                failure["category"],
+                failure_details,
+                classification,
+                correction_logs,
+                final_state.get("run_id") or None,
+            )
             if existing:
                 await conn.execute(
                     "UPDATE dead_letter_queue "
-                    "SET doc_type = ?, last_error = ?, retry_count = ?, failed_at = ? "
-                    "WHERE id = ?",
-                    (doc_type, last_error, retry_count, _now(), existing[0]["id"]),
+                    "SET doc_type = ?, last_error = ?, retry_count = ?, "
+                    "failed_stage = ?, error_code = ?, error_category = ?, "
+                    "failure_details = ?, classification = ?, correction_logs = ?, "
+                    "run_id = ?, failed_at = ? WHERE id = ?",
+                    (*columns, _now(), existing[0]["id"]),
                 )
             else:
                 await conn.execute(
                     "INSERT INTO dead_letter_queue "
                     "(file_path, source_hash, doc_type, last_error, retry_count, "
-                    "failed_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (file_path, source_hash, doc_type, last_error, retry_count, _now()),
+                    "failed_stage, error_code, error_category, failure_details, "
+                    "classification, correction_logs, run_id, failed_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (file_path, source_hash, *columns, _now()),
                 )
             await conn.commit()
 
             logger.warning(
-                "☠️  {} → dead_letter_queue | error='{}' | retries={}",
+                "☠️  {} → dead_letter_queue | stage={} | code={} | error='{}' | retries={}",
                 Path(file_path).name,
+                failure["stage"],
+                failure["code"],
                 last_error[:80],
                 retry_count,
             )
         finally:
             await conn.close()
+
+
+def _to_json(value: Any) -> Optional[str]:
+    """JSON-encode a value for a TEXT column (None stays NULL)."""
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False, default=str)

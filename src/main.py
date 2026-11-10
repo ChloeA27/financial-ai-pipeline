@@ -11,13 +11,21 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from loguru import logger
 
 from src.graph.builder import run_pipeline
 from src.nodes.reader import read_directory
+from src.state.failure import (
+    CAT_UNKNOWN,
+    PIPELINE_EXCEPTION,
+    STAGE_PIPELINE,
+    make_failure,
+)
 from src.storage import ExtractionRepository, init_db
+from src.utils.hashing import content_hash
 
 
 def _setup_logger(level: str = "INFO") -> None:
@@ -53,10 +61,13 @@ def _summarise_state(file_name: str, state: dict) -> None:
             retries,
         )
     elif error:
+        failure = state.get("failure") or {}
         logger.error(
-            "❌ {} | {} | FAILED | retries={} | error={}",
+            "❌ {} | {} | FAILED | stage={} code={} | retries={} | error={}",
             file_name,
             doc_type,
+            failure.get("stage", "?"),
+            failure.get("code", "?"),
             retries,
             error,
         )
@@ -97,16 +108,23 @@ async def _process_single(file_path: str, repo: ExtractionRepository) -> dict:
 
 def _crashed_state(file_path: str, raw_content: str, exc: BaseException) -> dict:
     """State for a document whose pipeline raised, so it is routed to the DLQ."""
+    message = f"pipeline raised {type(exc).__name__}: {exc}"
     return {
         "file_path": file_path,
         "raw_content": raw_content,
+        "source_hash": content_hash(raw_content),
+        "run_id": uuid.uuid4().hex,
+        "step_runs": [],
         "doc_type": None,
         "extracted_data": None,
         "validation_passed": None,
         "validation_report": None,
         "correction_logs": [],
         "retry_count": 0,
-        "error": f"pipeline raised {type(exc).__name__}: {exc}",
+        "error": message,
+        "failure": make_failure(
+            STAGE_PIPELINE, PIPELINE_EXCEPTION, CAT_UNKNOWN, message
+        ),
     }
 
 

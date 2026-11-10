@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,6 +22,12 @@ class Metadata(BaseModel):
         description="Absolute path to the original raw text file on disk.",
     )
     """Fully qualified filesystem path of the source announcement."""
+
+    source_hash: Optional[str] = Field(
+        default=None,
+        description="SHA-256 of the processed text; key of the raw (bronze) layer.",
+    )
+    """Links this result to the exact stored source text (``documents.raw_uri``)."""
 
     processed_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
@@ -80,13 +86,6 @@ class BaseDoc(BaseModel):
         description="Traceability metadata for audit trail.",
     )
     """Embedded Metadata object carrying full provenance."""
-
-    raw_text_snippet: str = Field(
-        default="",
-        max_length=500,
-        description="Short prefix of the original text for manual review.",
-    )
-    """First ~500 chars of the source file; aids human-in-the-loop debugging."""
 
     # ── Pydantic v2 configuration ──
     model_config = ConfigDict(frozen=False)  # Allow mutation during self-correction

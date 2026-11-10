@@ -363,7 +363,7 @@ class TestRetrieverSelfExclusion:
         assert "AlphaAcquirer" not in ctx
 
     async def test_extractor_excludes_its_own_file(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, rag_on: None
     ) -> None:
         """extractor_node must pass its file_path through to the retriever."""
         from src.nodes import extractor as extractor_module
@@ -375,6 +375,8 @@ class TestRetrieverSelfExclusion:
             return ""
 
         class _Client:
+            last_call = None
+
             async def generate_structured(self, **_: Any) -> Any:
                 from src.schemas.extraction.manda import MandaExtraction
 

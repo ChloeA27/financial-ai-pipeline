@@ -134,7 +134,6 @@ class MandaExtractionResult(BaseDoc, ProfileValidatorMixin):
         cls,
         extraction: MandaExtraction,
         metadata: Metadata,
-        raw_text_snippet: str = "",
         *,
         doc_id: str | None = None,
     ) -> MandaExtractionResult:
@@ -142,7 +141,6 @@ class MandaExtractionResult(BaseDoc, ProfileValidatorMixin):
         return cls(
             doc_id=doc_id if doc_id else uuid.uuid4().hex,
             metadata=metadata,
-            raw_text_snippet=raw_text_snippet,
             acquirer=extraction.acquirer,
             target=extraction.target,
             total_value_usd=extraction.total_value_usd,
