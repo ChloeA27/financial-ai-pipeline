@@ -16,6 +16,7 @@ Usage::
 
     python scripts/eval_classification.py --dataset <E1 dir>/e1_dataset_draft.jsonl \\
         --coverage-only
+    # or set E1_DATASET=<E1 dir>/e1_dataset_draft.jsonl in .env and omit --dataset
     python scripts/eval_classification.py --dataset ... --estimate
     python scripts/eval_classification.py --dataset ... --variants head,structured,keyword \\
         --reps 2 --temperature 0 --max-calls 400
@@ -35,6 +36,7 @@ import asyncio
 import csv
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import time
@@ -42,7 +44,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from dotenv import dotenv_values
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
+ENV_FILE = REPO_ROOT / ".env"
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.config import settings  # noqa: E402
@@ -422,10 +427,24 @@ async def run_real(args: argparse.Namespace, cases: list[e1.Case]) -> Path:
 # ── CLI ──────────────────────────────────────────────────────────────
 
 
+def _default_dataset() -> Optional[Path]:
+    """
+    Fallback for --dataset: ``E1_DATASET`` from the environment, else from the
+    local ``.env``.  The dataset lives outside the repo and is only read.
+    """
+    value = os.environ.get("E1_DATASET")
+    if not value and ENV_FILE.exists():
+        value = dotenv_values(ENV_FILE).get("E1_DATASET")
+    return Path(value).expanduser() if value else None
+
+
 def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="E1 classification evaluation")
     p.add_argument(
-        "--dataset", type=Path, required=True, help="E1 JSONL (e1_dataset_draft.jsonl)"
+        "--dataset",
+        type=Path,
+        default=None,
+        help="E1 JSONL (e1_dataset_draft.jsonl); default: E1_DATASET from env / .env",
     )
     p.add_argument(
         "--inputs-dir", type=Path, default=None, help="default: <dataset dir>/inputs"
@@ -452,6 +471,13 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--estimate", action="store_true")
     p.add_argument("--allow-test", action="store_true")
     args = p.parse_args(argv)
+    args.dataset = args.dataset or _default_dataset()
+    if args.dataset is None:
+        p.error(
+            "no dataset: pass --dataset or set E1_DATASET in the environment / .env"
+        )
+    if not args.dataset.is_file():
+        p.error(f"dataset not found: {args.dataset}")
     args.variants = [v.strip() for v in args.variants.split(",") if v.strip()]
     unknown = [v for v in args.variants if v not in STRATEGIES]
     if unknown:

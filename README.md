@@ -206,15 +206,17 @@ python scripts/evaluate.py --threshold 0.85
 
 ### Run the classification-stage evaluation (E1)
 
-Compares classifier input strategies on a frozen list of labelled SEC EDGAR filings (offline paired comparison; dataset kept outside this repo). The test split is refused until the prompt and input strategy are final.
+Compares classifier input strategies on a frozen list of labelled SEC EDGAR filings (offline paired comparison). The dataset is kept outside this repo and only read; results are written under `results/e1/`. The test split is refused until the prompt and input strategy are final.
+
+Point the runner at the dataset once in `.env` (`E1_DATASET=<E1>/e1_dataset_draft.jsonl`), or pass `--dataset` on each call:
 
 ```bash
 # no LLM calls: is the gold evidence inside each strategy's window?
-python scripts/eval_classification.py --dataset <E1>/e1_dataset_draft.jsonl --coverage-only
+python scripts/eval_classification.py --coverage-only
 # no LLM calls: planned calls and tokens
-python scripts/eval_classification.py --dataset <E1>/e1_dataset_draft.jsonl --estimate
+python scripts/eval_classification.py --estimate
 # real run: head / structured / keyword, 2 repetitions, temperature 0
-python scripts/eval_classification.py --dataset <E1>/e1_dataset_draft.jsonl --reps 2 --max-calls 630
+python scripts/eval_classification.py --reps 2 --max-calls 630
 ```
 
 Browse a run (variant comparison, outcome funnel, per-document trace with the classifier's window and the model's evidence quote highlighted). Served on localhost only (`.streamlit/config.toml`); cases that are not human-verified are hidden in the trace unless you opt in:

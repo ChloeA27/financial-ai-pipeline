@@ -61,6 +61,44 @@ def test_test_split_is_sealed(dataset: Path) -> None:
         cli._parse_args(["--dataset", str(dataset), "--split", "test"])
 
 
+def test_dataset_defaults_to_e1_dataset_env(
+    dataset: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("E1_DATASET", str(dataset))
+    assert cli._parse_args([]).dataset == dataset
+
+
+def test_dataset_read_from_dotenv_file(
+    dataset: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = tmp_path / ".env"
+    env.write_text(f"DEEPSEEK_API_KEY=x\nE1_DATASET={dataset}\n")
+    monkeypatch.delenv("E1_DATASET", raising=False)
+    monkeypatch.setattr(cli, "ENV_FILE", env)
+    args = cli._parse_args([])
+    assert args.dataset == dataset
+    assert args.inputs_dir == dataset.parent / "inputs"
+
+
+def test_explicit_dataset_beats_env(
+    dataset: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("E1_DATASET", str(tmp_path / "other.jsonl"))
+    assert cli._parse_args(["--dataset", str(dataset)]).dataset == dataset
+
+
+def test_missing_dataset_is_a_clear_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("E1_DATASET", raising=False)
+    monkeypatch.setattr(cli, "ENV_FILE", tmp_path / "absent.env")
+    with pytest.raises(SystemExit):
+        cli._parse_args([])
+    monkeypatch.setenv("E1_DATASET", str(tmp_path / "nope.jsonl"))
+    with pytest.raises(SystemExit):
+        cli._parse_args([])
+
+
 def test_unknown_variant_is_rejected(dataset: Path) -> None:
     with pytest.raises(SystemExit):
         cli._parse_args(["--dataset", str(dataset), "--variants", "head,magic"])
