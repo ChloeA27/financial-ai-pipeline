@@ -241,15 +241,22 @@ financial-ai-pipeline/
 │   └── expected_fail/            ← Golden files pipeline must reject
 │
 ├── scripts/
-│   └── evaluate.py                ← Golden dataset evaluation runner
+│   ├── evaluate.py                ← Golden dataset evaluation runner (end-to-end)
+│   └── eval_classification.py     ← E1 classification-stage evaluation runner
+│
+├── results/
+│   ├── SUMMARY.md                 ← Project state + latest measured numbers
+│   └── e1/                        ← One folder per E1 run (index: results/e1/README.md)
 │
 ├── .github/workflows/
 │   └── ci.yml                     ← CI: unit tests → golden eval → black lint
+├── .streamlit/config.toml         ← Dashboards bind to localhost only
 │
 ├── src/
 │   ├── main.py                    ← CLI entry point (--file / --dir)
 │   ├── config.py                  ← Pydantic Settings (env-driven)
-│   ├── dashboard.py                ← Streamlit monitoring UI
+│   ├── dashboard.py               ← Streamlit monitoring UI (pipeline.db)
+│   ├── e1_dashboard.py            ← Streamlit UI for E1 runs (results/e1/)
 │   │
 │   ├── graph/builder.py           ← LangGraph StateGraph construction
 │   ├── state/pipeline_state.py    ← TypedDict state schema
@@ -258,6 +265,7 @@ financial-ai-pipeline/
 │   ├── nodes/
 │   │   ├── reader.py               ← async file I/O + SHA-256 hashing
 │   │   ├── classifier.py           ← LLM doc-type label + evidence quote
+│   │   ├── input_window.py         ← classifier input strategies (head / structured / keyword)
 │   │   ├── classification_validator.py ← code checks on the classification (no LLM)
 │   │   ├── extractor.py            ← LLM extraction + registry pattern
 │   │   ├── validator.py            ← rule-based quality gate
@@ -268,10 +276,12 @@ financial-ai-pipeline/
 │   │   ├── base.py                 ← Metadata + BaseDoc
 │   │   └── extraction/             ← per-doc-type two-model contracts
 │   │
-│   ├── rag/                        ← embedder, ChromaDB client, retriever
+│   ├── rag/                        ← embedder, ChromaDB client, retriever (off by default)
 │   ├── llm/client.py                ← OpenAI-SDK LLM client (DeepSeek-compatible)
 │   │
 │   ├── utils/hashing.py             ← SHA-256 content hash (shared key)
+│   ├── evaluation/e1.py             ← E1 scoring: gold projection, coverage, McNemar
+│   ├── viz/e1_data.py               ← data shaping for e1_dashboard.py (unit-tested)
 │   │
 │   └── storage/
 │       ├── db.py                    ← aiosqlite schema DDL + in-place migrations
@@ -279,10 +289,11 @@ financial-ai-pipeline/
 │       ├── json_writer.py           ← JSON dual-write
 │       └── repository.py            ← raw + gold/DLQ + step_runs persistence
 │
-└── tests/                          ← unit + integration tests
-    ├── test_graph/  test_cli/  test_eval/  test_nodes/
+└── tests/                          ← unit + integration tests, mirrors src/
+    ├── test_nodes/  test_graph/  test_storage/  test_llm/  test_rag/
+    ├── test_schemas/  test_eval/  test_cli/  test_viz/
     ├── fake_embedding.py           ← offline embedder used by the test suite
-    └── conftest.py                 ← markers + per-test vector-store isolation
+    └── conftest.py                 ← markers + per-test vector-store / raw-store isolation
 ```
 
 ---
@@ -292,14 +303,16 @@ financial-ai-pipeline/
 | Document | Purpose |
 |----------|---------|
 | [DOCS_SYSTEM_DESIGN.md](./DOCS_SYSTEM_DESIGN.md) | Full system design white paper — graph topology, two-model isolation, idempotency defense, SCD2 versioning, self-correction loop, RAG architecture, CI golden-dataset gate, concurrency model |
+| [results/SUMMARY.md](./results/SUMMARY.md) | Current state of the project, latest measured evaluation numbers, open issues |
+| [results/e1/README.md](./results/e1/README.md) | Index of E1 evaluation runs and how a run folder is laid out |
 
 ---
 
 ## 🧪 Testing & CI
 
-- **200+ unit tests** across nodes, schemas, storage, graph routing and the RAG layer (`pytest -m "not integration"`, no LLM calls). Each test gets a private vector store and an offline fake embedder; add `and not real_embedder` to skip the few tests that load the real model: `pytest -m "not integration and not real_embedder"`
-- **Golden dataset evaluation** (`scripts/evaluate.py`) runs the full pipeline end-to-end against hand-labelled expected outputs using a field-type-aware comparison engine (`enum`, `numeric` ±1 %, `bool`, `date`, `text_lower`; per-field overrides `date_range`, `fuzzy_match`, `accept_null`), including per-field override rules (e.g. `date_range`, custom `fuzzy_match` thresholds)
-- **GitHub Actions CI** (`.github/workflows/ci.yml`) runs three sequential gates on every push: unit tests → golden evaluation → `black` lint check. The golden evaluation needs the `DEEPSEEK_API_KEY` secret: it is skipped (with a warning) on fork PRs, but a push without the secret fails the build
+- **400+ unit tests** across nodes, schemas, storage, graph routing, the RAG layer and the evaluation code (`pytest -m "not integration"`, no LLM calls). Each test gets a private vector store and an offline fake embedder; add `and not real_embedder` to skip the few tests that load the real model: `pytest -m "not integration and not real_embedder"`
+- **Golden dataset evaluation** (`scripts/evaluate.py`) runs the full pipeline end-to-end against hand-labelled expected outputs using a field-type-aware comparison engine (`enum`, `numeric` ±1 %, `bool`, `date`, `text_lower`; per-field overrides `date_range`, `fuzzy_match` with custom thresholds, `accept_null`)
+- **GitHub Actions CI** (`.github/workflows/ci.yml`) runs three sequential gates on every push to `main` and every pull request into it: unit tests → golden evaluation → `black` lint check. The golden evaluation needs the `DEEPSEEK_API_KEY` secret: it is skipped (with a warning) on fork PRs, but a push without the secret fails the build
 
 ---
 

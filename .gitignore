@@ -18,10 +18,6 @@ data/
 # Output
 output/*.json
 
-# Logs
-logs/*.log
-logs/*.log.*
-
 # IDE
 .idea/
 .vscode/

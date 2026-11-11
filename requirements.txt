@@ -1,6 +1,7 @@
 # ============================================================
 # Financial AI Pipeline — Requirements
-# Senior AI Data Engineer Take-Home
+# Runtime dependencies (dev: requirements-dev.txt,
+# dashboards: requirements-dashboard.txt)
 # ============================================================
 
 # === LangGraph & LangChain Ecosystem ===

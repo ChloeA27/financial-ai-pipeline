@@ -18,8 +18,8 @@
 7. [Self-Correction Loop](#7-self-correction-loop)
 8. [Storage Architecture](#8-storage-architecture)
 9. [Multi-Business-Line Extension (Registry Pattern)](#9-multi-business-line-extension-registry-pattern)
-10. [RAG-Augmented Extraction (Phase 2)](#10-rag-augmented-extraction-phase-2)
-11. [CI Golden Dataset Gate (Phase 3-C)](#11-ci-golden-dataset-gate-phase-3-c)
+10. [RAG-Augmented Extraction (off by default)](#10-rag-augmented-extraction-off-by-default)
+11. [CI Golden Dataset Gate](#11-ci-golden-dataset-gate)
 12. [Concurrency & Performance](#12-concurrency--performance)
 13. [Appendix — Physical File Map](#13-appendix--physical-file-map)
 
@@ -733,7 +733,7 @@ A failure writes the error type into the retry feedback and sends the document b
 
 ---
 
-## 10. RAG-Augmented Extraction (Phase 2)
+## 10. RAG-Augmented Extraction (off by default)
 
 > **Status: switched off by default** (`RAG_ENABLED=false` in `src/config.py`). When off, the Extractor does not call `retrieve_context()` and the Repository writes no vectors (the code and any existing collection are left as they are). Reason: in a batch run RAG feeds earlier documents' validated results to later ones as few-shot examples, so outcomes depend on processing order and concurrency — unacceptable while comparing variants. Each `step_runs` extract record carries `rag_context_used` so runs with and without RAG can be told apart. Its effect on accuracy has not been measured.
 
@@ -827,7 +827,7 @@ Embedding is currently purely local (`all-MiniLM-L6-v2` via SentenceTransformer)
 
 ---
 
-## 11. CI Golden Dataset Gate (Phase 3-C)
+## 11. CI Golden Dataset Gate
 
 ### 11.1 Motivation
 
@@ -913,7 +913,7 @@ jobs:
 ```
 
 Three gates, sequential:
-1. **Unit tests** — 200+ tests, zero LLM calls. Every test runs against a private ChromaDB directory and an offline fake embedding function (`tests/conftest.py`), so nothing touches `data/chromadb` and nothing needs the network — except tests marked `real_embedder`, which load the actual sentence-transformers model. For a fully offline run: `pytest -m "not integration and not real_embedder"`.
+1. **Unit tests** — 400+ tests, zero LLM calls. Every test runs against a private ChromaDB directory and an offline fake embedding function (`tests/conftest.py`), so nothing touches `data/chromadb` and nothing needs the network — except tests marked `real_embedder`, which load the actual sentence-transformers model. For a fully offline run: `pytest -m "not integration and not real_embedder"`.
 2. **Golden evaluation** — full pipeline end-to-end with real LLM, exit code 0/1 gates the build
 3. **Black lint** — format consistency, with `black==25.11.0` pinned in `requirements-dev.txt` and installed alongside the test tooling
 
@@ -921,7 +921,7 @@ Three gates, sequential:
 
 ### 11.6 Isolation During Eval
 
-For each golden file the evaluator swaps `settings.sqlite_db_path` and `settings.chromadb_path` to a temporary directory and resets the ChromaDB singleton via `override_chroma_path`, restoring both afterwards. `evaluate.py` only runs the graph (`run_pipeline`) and never calls the repository, so nothing is persisted and the RAG index stays empty — the golden gate therefore measures **zero-shot** extraction quality, not RAG-augmented quality. Files are evaluated sequentially (the settings swap is process-global, so the runner is not safe to parallelise).
+For each golden file the evaluator swaps `settings.sqlite_db_path`, `settings.chromadb_path` and `settings.raw_store_path` to a temporary directory and resets the ChromaDB singleton via `override_chroma_path`, restoring both afterwards. `evaluate.py` only runs the graph (`run_pipeline`) and never calls the repository, so nothing is persisted and the RAG index stays empty — the golden gate therefore measures **zero-shot** extraction quality, not RAG-augmented quality. Files are evaluated sequentially (the settings swap is process-global, so the runner is not safe to parallelise).
 
 ---
 
@@ -972,7 +972,12 @@ financial-ai-pipeline/
 │       └── dividend_apple_2026.txt
 │
 ├── scripts/
-│   └── evaluate.py               ← Golden dataset evaluation runner (Phase 3-C)
+│   ├── evaluate.py               ← Golden dataset evaluation runner (end-to-end extraction)
+│   └── eval_classification.py    ← E1 classification-stage evaluation runner
+│
+├── results/
+│   ├── SUMMARY.md                ← State of the project and the latest measured numbers
+│   └── e1/                       ← One folder per E1 run (index: results/e1/README.md)
 │
 ├── golden/
 │   ├── expected_pass/            ← Pipeline must produce ≥85% accuracy
@@ -984,11 +989,13 @@ financial-ai-pipeline/
 │
 ├── .github/workflows/
 │   └── ci.yml                    ← CI gates: unit tests → golden eval → lint
+├── .streamlit/config.toml        ← Dashboards bind to localhost, no usage stats
 │
 ├── src/
 │   ├── main.py                   ← CLI entry point (argparse)
 │   ├── config.py                 ← Pydantic Settings
-│   ├── dashboard.py              ← Streamlit monitoring UI
+│   ├── dashboard.py              ← Streamlit monitoring UI (pipeline.db)
+│   ├── e1_dashboard.py           ← Streamlit UI for E1 runs (results/e1/)
 │   │
 │   ├── graph/
 │   │   └── builder.py            ← LangGraph StateGraph construction
@@ -1000,6 +1007,7 @@ financial-ai-pipeline/
 │   ├── nodes/
 │   │   ├── reader.py             ← async file I/O
 │   │   ├── classifier.py         ← LLM doc-type label + evidence quote
+│   │   ├── input_window.py       ← classifier input strategies (head / structured / keyword)
 │   │   ├── classification_validator.py ← code checks on the classification
 │   │   ├── extractor.py          ← LLM extraction + Registry
 │   │   ├── validator.py          ← Rule-based quality gate
@@ -1015,7 +1023,7 @@ financial-ai-pipeline/
 │   │       ├── dividend.py       ← Dividend two-model contract
 │   │       └── profiles.py       ← ValidationProfiles (allowed-value sets per business line)
 │   │
-│   ├── rag/                      ← Phase 2 — RAG-Augmented Extraction
+│   ├── rag/                      ← RAG-augmented extraction (RAG_ENABLED, off by default)
 │   │   ├── __init__.py
 │   │   ├── embedder.py           ← SentenceTransformer embedding function (singleton)
 │   │   ├── chroma_client.py      ← Singleton ChromaDB client + per-type collections
@@ -1028,6 +1036,12 @@ financial-ai-pipeline/
 │   ├── utils/
 │   │   └── hashing.py            ← SHA-256 content hash (shared key)
 │   │
+│   ├── evaluation/
+│   │   └── e1.py                 ← E1 scoring: gold projection, coverage, McNemar
+│   │
+│   ├── viz/
+│   │   └── e1_data.py            ← data shaping for e1_dashboard.py (no Streamlit, unit-tested)
+│   │
 │   └── storage/
 │       ├── __init__.py           ← Repository + init_db exports
 │       ├── db.py                 ← aiosqlite connection + schema DDL + migrations
@@ -1035,31 +1049,25 @@ financial-ai-pipeline/
 │       ├── json_writer.py        ← JSON file dual-write
 │       └── repository.py         ← raw + gold/DLQ + step_runs persistence
 │
-├── output/                       ← JSON dual-write artefacts
-├── data/                         ← SQLite database + raw/ (bronze texts)
-├── logs/                         ← Log output
+├── output/                       ← JSON dual-write artefacts (local, git-ignored)
+├── data/                         ← SQLite database + raw/ bronze texts (local, git-ignored)
 │
-├── tests/
-│   ├── conftest.py               ← Markers + autouse vector-store isolation
+├── tests/                        ← mirrors src/
+│   ├── conftest.py               ← Markers + autouse vector-store / raw-store isolation
 │   ├── fake_embedding.py         ← Offline deterministic embedding function
-│   ├── test_graph/
-│   │   └── test_builder.py       ← Routers + scripted-LLM whole-graph runs
-│   ├── test_cli/
-│   │   └── test_main_concurrency.py
-│   ├── test_eval/
-│   │   └── test_expected_fail.py ← Golden-eval expected_fail scoring
-│   └── test_nodes/
-│       ├── test_reader.py
-│       ├── test_schemas.py
-│       ├── test_validator.py
-│       ├── test_extractor.py     ← Schema-parse failures → self-correction
-│       ├── test_retry.py
-│       ├── test_storage.py
-│       └── test_rag.py           ← Phase 2 — RAG tests
+│   ├── test_graph/               ← Routers, scripted-LLM whole-graph runs, audit trail
+│   ├── test_cli/                 ← Batch mode, concurrency, crash handling
+│   ├── test_eval/                ← Golden-eval scoring, E1 scoring and runner
+│   ├── test_nodes/               ← One file per node + input windows, retries, failure records
+│   ├── test_storage/             ← SQLite repository, raw store
+│   ├── test_llm/                 ← LLM client call records
+│   ├── test_rag/                 ← Vector store + retriever
+│   ├── test_schemas/             ← Two-model contracts
+│   └── test_viz/                 ← E1 dashboard data + headless render
 │
 ├── requirements.txt              ← Runtime dependencies
 ├── requirements-dev.txt          ← Test + lint tooling (pytest, black==25.11.0)
-├── requirements-dashboard.txt    ← Optional: Streamlit dashboard deps
+├── requirements-dashboard.txt    ← Optional: Streamlit dashboards
 ├── pyproject.toml                ← Pytest configuration
 ├── .env.example                  ← Environment template
 └── .gitignore

@@ -1,5 +1,5 @@
 """
-Phase 3-C: Golden Dataset Eval Runner
+Golden Dataset Eval Runner (end-to-end extraction)
 
 Compares pipeline output against golden (hand-labelled) extraction results.
 Supports field-type-aware comparison with per-field eval overrides.
