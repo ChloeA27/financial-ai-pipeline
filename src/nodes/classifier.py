@@ -21,9 +21,9 @@ goes through the classify self-correction loop with its own retry budget.
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Optional
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import ValidationError
 
 from src.config import settings
 from src.llm.client import LLMCallInfo, LLMClient
@@ -42,7 +42,7 @@ from src.nodes.retry import (
     register_classification_failure,
     summarise_validation_error,
 )
-from src.state.failure import (
+from src.schemas.failure import (
     CAT_INPUT_ERROR,
     CAT_STRUCTURE,
     CAT_TRANSIENT,
@@ -52,49 +52,8 @@ from src.state.failure import (
     STAGE_CLASSIFY,
     make_failure,
 )
-from src.state.pipeline_state import PipelineState
-
-# Types that have an extraction path.  Must stay in sync with the Extractor
-# registry (enforced by a unit test).
-SUPPORTED_DOC_TYPES: tuple[str, ...] = ("M&A", "Dividend")
-OUT_OF_SCOPE_LABEL = "none"
-UNCLEAR_LABEL = "unclear"
-ALL_LABELS: tuple[str, ...] = SUPPORTED_DOC_TYPES + (OUT_OF_SCOPE_LABEL, UNCLEAR_LABEL)
-
-
-# ── Structured output schema for the LLM ──
-
-DocLabel = Literal["M&A", "Dividend", "none", "unclear"]
-
-
-class ClassificationResult(BaseModel):
-    """Strict schema that the LLM must fill — the label is an enum, not free text."""
-
-    doc_type: DocLabel = Field(
-        ...,
-        description="One of: 'M&A', 'Dividend', 'none', 'unclear'.",
-    )
-    evidence_quote: str = Field(
-        default="",
-        max_length=400,
-        description=(
-            "Verbatim sentence (25-300 characters) copied from the document that "
-            "justifies the label. Required for 'M&A' and 'Dividend'; empty for "
-            "'none' and 'unclear'."
-        ),
-    )
-    confidence: float = Field(
-        ...,
-        ge=0.0,
-        le=1.0,
-        description="Self-reported confidence (0.0-1.0). Logged only, never used for routing.",
-    )
-    reasoning: str = Field(
-        ...,
-        max_length=300,
-        description="Brief one-sentence justification for the classification.",
-    )
-
+from src.schemas.classification import ClassificationResult
+from src.schemas.state import PipelineState
 
 # ── System prompt (asset: src/prompts/templates/classifier_system.md) ──
 

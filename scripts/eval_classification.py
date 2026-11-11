@@ -87,7 +87,8 @@ def _git_state() -> dict[str, Any]:
 
 def _system_message_chars() -> int:
     from src.llm.client import _build_schema_hint
-    from src.nodes.classifier import SYSTEM_PROMPT, ClassificationResult
+    from src.nodes.classifier import SYSTEM_PROMPT
+    from src.schemas.classification import ClassificationResult
 
     return len(SYSTEM_PROMPT) + 200 + len(_build_schema_hint(ClassificationResult))
 

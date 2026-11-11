@@ -26,7 +26,7 @@ from src.nodes.step_runs import (
     make_step_run,
     outcome_of,
 )
-from src.state.failure import (
+from src.schemas.failure import (
     CAT_BUSINESS_RULE,
     CAT_MISSING_INFO,
     CAT_STRUCTURE,
@@ -35,7 +35,7 @@ from src.state.failure import (
     STAGE_VALIDATE,
     make_failure,
 )
-from src.state.pipeline_state import PipelineState
+from src.schemas.state import PipelineState
 
 
 # ====================================================================

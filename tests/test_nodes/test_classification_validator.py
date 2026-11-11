@@ -15,7 +15,7 @@ from src.nodes.classification_validator import (
     normalise_text,
     quote_in_source,
 )
-from src.nodes.classifier import ALL_LABELS, SUPPORTED_DOC_TYPES
+from src.schemas.classification import ALL_LABELS, SUPPORTED_DOC_TYPES
 from src.nodes.extractor import EXTRACTOR_MODELS, EXTRACTOR_PROMPTS
 
 SOURCE = (

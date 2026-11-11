@@ -202,7 +202,7 @@ workflow.add_conditional_edges(
 
 ### 3.2 State Schema (`PipelineState`)
 
-Defined as a `TypedDict` in `src/state/pipeline_state.py`:
+Defined as a `TypedDict` in `src/schemas/state.py`; the audit records it carries (`StepRun`, `FailureInfo`, `CorrectionLog`) are in `src/schemas/events.py`:
 
 | Key | Origin | Type | Description |
 |-----|--------|------|-------------|
@@ -714,7 +714,7 @@ The Classifier node (`src/nodes/classifier.py`) is **prompt-driven**. Its output
 
 `none` and `unclear` are deliberately separate: `none` is an expected out-of-scope outcome, `unclear` means a human should look. `Management_Change` is **not** a label yet — those documents currently come back as `none` and can be given their own label (and extractor) later.
 
-To add a new document type: list it in `classifier_system.md`, add it to the `DocLabel` literal and `SUPPORTED_DOC_TYPES` in `classifier.py`, and register it in the Extractor dictionaries. A unit test fails if `SUPPORTED_DOC_TYPES` and the Extractor registry drift apart.
+To add a new document type: list it in `classifier_system.md`, add it to the `DocLabel` literal and `SUPPORTED_DOC_TYPES` in `src/schemas/classification.py`, and register it in the Extractor dictionaries. A unit test fails if `SUPPORTED_DOC_TYPES` and the Extractor registry drift apart.
 
 **Classification Validator** (`src/nodes/classification_validator.py`, plain code, no LLM) checks, for `M&A` / `Dividend`:
 1. *structure* — the label is one of the known labels;
@@ -1005,10 +1005,6 @@ financial-ai-pipeline/
 │   ├── graph/
 │   │   └── builder.py            ← LangGraph StateGraph construction
 │   │
-│   ├── state/
-│   │   ├── pipeline_state.py     ← TypedDict state schema
-│   │   └── failure.py            ← DLQ failure vocabulary (stages, categories, codes)
-│   │
 │   ├── nodes/
 │   │   ├── reader.py             ← async file I/O
 │   │   ├── classifier.py         ← LLM doc-type label + evidence quote
@@ -1019,7 +1015,11 @@ financial-ai-pipeline/
 │   │   ├── retry.py              ← Shared retry bookkeeping (classify + extract loops)
 │   │   └── step_runs.py          ← per-execution audit records (silver layer)
 │   │
-│   ├── schemas/
+│   ├── schemas/                  ← contracts: nodes, graph, storage and evals depend on these
+│   │   ├── state.py              ← PipelineState (TypedDict + reducers)
+│   │   ├── events.py             ← StepRun / FailureInfo / CorrectionLog audit records
+│   │   ├── failure.py            ← DLQ failure vocabulary (stages, categories, codes)
+│   │   ├── classification.py     ← labels + ClassificationResult (classifier output)
 │   │   ├── base.py               ← Metadata + BaseDoc (foundation)
 │   │   └── extraction/
 │   │       ├── __init__.py       ← Public exports
@@ -1064,7 +1064,7 @@ financial-ai-pipeline/
 ├── tests/                        ← mirrors src/
 │   ├── conftest.py               ← Markers + autouse vector-store / raw-store isolation
 │   ├── fake_embedding.py         ← Offline deterministic embedding function
-│   ├── test_graph/               ← Routers, scripted-LLM whole-graph runs, audit trail
+│   ├── test_graph/               ← Routers, scripted-LLM whole-graph runs, audit trail, layering rules
 │   ├── test_cli/                 ← Batch mode, concurrency, crash handling
 │   ├── test_eval/                ← Golden-eval scoring, E1 scoring and runner
 │   ├── test_nodes/               ← One file per node + input windows, retries, failure records

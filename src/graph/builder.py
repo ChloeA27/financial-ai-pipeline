@@ -39,7 +39,7 @@ from src.nodes.classification_validator import classification_validator_node
 from src.nodes.extractor import extractor_node
 from src.nodes.validator import validator_node
 from src.config import settings
-from src.state.pipeline_state import PipelineState
+from src.schemas.state import PipelineState
 
 
 # ── Conditional edges: self-correction routers ──

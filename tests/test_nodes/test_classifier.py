@@ -10,7 +10,8 @@ from typing import Any
 
 import pytest
 
-from src.nodes.classifier import ClassificationResult, classifier_node
+from src.nodes.classifier import classifier_node
+from src.schemas.classification import ClassificationResult
 from tests.test_nodes.test_extractor import FakeOpenAI
 
 TEXT = "Acme to acquire Widgets Inc. for $1B in cash."

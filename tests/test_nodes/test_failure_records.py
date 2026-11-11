@@ -12,7 +12,7 @@ import pytest
 from src.nodes.reader import reader_node
 from src.nodes.retry import register_classification_failure, register_failure
 from src.nodes.validator import validator_node
-from src.state.failure import fallback_failure, make_failure
+from src.schemas.failure import fallback_failure, make_failure
 
 
 def _exhausted(state: dict[str, Any]) -> dict[str, Any]:

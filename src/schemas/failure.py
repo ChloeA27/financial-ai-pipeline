@@ -30,7 +30,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from src.state.pipeline_state import FailureInfo
+from src.schemas.events import FailureInfo
 
 # ── Stages ──
 STAGE_READ = "read"

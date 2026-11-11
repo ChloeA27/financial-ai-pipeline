@@ -30,7 +30,7 @@ from loguru import logger
 
 from src.config import settings
 from src.rag.repository import delete_from_vector_store, save_to_vector_store
-from src.state.failure import fallback_failure
+from src.schemas.failure import fallback_failure
 from src.storage.db import get_connection
 from src.storage.raw_store import store_raw
 from src.utils.hashing import content_hash

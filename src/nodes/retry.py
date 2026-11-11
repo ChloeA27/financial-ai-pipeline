@@ -25,7 +25,8 @@ from typing import Any, Optional
 from pydantic import ValidationError
 
 from src.config import settings
-from src.state.pipeline_state import CorrectionLog, FailureInfo, PipelineState
+from src.schemas.events import CorrectionLog, FailureInfo
+from src.schemas.state import PipelineState
 
 LOOP_CLASSIFY = "classify"
 LOOP_EXTRACT = "extract"

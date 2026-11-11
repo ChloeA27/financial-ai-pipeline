@@ -42,7 +42,7 @@ from src.nodes.step_runs import (
     make_step_run,
     outcome_of,
 )
-from src.state.failure import (
+from src.schemas.failure import (
     CAT_INPUT_ERROR,
     CAT_OUT_OF_SCOPE,
     CAT_STRUCTURE,
@@ -55,7 +55,7 @@ from src.state.failure import (
     UNSUPPORTED_DOC_TYPE,
     make_failure,
 )
-from src.state.pipeline_state import PipelineState
+from src.schemas.state import PipelineState
 
 
 # ════════════════════════════════════════════════════════════════════════

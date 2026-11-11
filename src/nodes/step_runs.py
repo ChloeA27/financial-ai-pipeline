@@ -14,7 +14,8 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from src.llm.client import LLMCallInfo
-from src.state.pipeline_state import PipelineState, StepRun
+from src.schemas.events import StepRun
+from src.schemas.state import PipelineState
 
 OUTCOME_PASSED = "passed"
 OUTCOME_REJECTED = "rejected"

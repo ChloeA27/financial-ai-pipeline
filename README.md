@@ -261,8 +261,6 @@ financial-ai-pipeline/
 │   ├── e1_dashboard.py            ← Streamlit UI for E1 runs (results/e1/)
 │   │
 │   ├── graph/builder.py           ← LangGraph StateGraph construction
-│   ├── state/pipeline_state.py    ← TypedDict state schema
-│   ├── state/failure.py           ← DLQ failure vocabulary (stages, categories, codes)
 │   │
 │   ├── nodes/
 │   │   ├── reader.py               ← async file I/O + SHA-256 hashing
@@ -274,9 +272,13 @@ financial-ai-pipeline/
 │   │   ├── retry.py                ← shared retry bookkeeping (classify + extract loops)
 │   │   └── step_runs.py            ← per-execution audit records
 │   │
-│   ├── schemas/
+│   ├── schemas/                    ← contracts (no logic depends on a node)
+│   │   ├── state.py                ← PipelineState (graph state, reducers)
+│   │   ├── events.py               ← StepRun / FailureInfo / CorrectionLog audit records
+│   │   ├── failure.py              ← DLQ failure vocabulary (stages, categories, codes)
+│   │   ├── classification.py       ← labels + ClassificationResult (LLM output)
 │   │   ├── base.py                 ← Metadata + BaseDoc
-│   │   └── extraction/             ← per-doc-type two-model contracts
+│   │   └── extraction/             ← per-doc-type two-model contracts (LLM output)
 │   │
 │   ├── rag/                        ← embedder, ChromaDB client, retriever (off by default)
 │   ├── llm/client.py                ← OpenAI-SDK LLM client (DeepSeek-compatible)

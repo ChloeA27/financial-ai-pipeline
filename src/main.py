@@ -19,7 +19,7 @@ from loguru import logger
 
 from src.graph.builder import run_pipeline
 from src.nodes.reader import read_directory
-from src.state.failure import (
+from src.schemas.failure import (
     CAT_UNKNOWN,
     PIPELINE_EXCEPTION,
     STAGE_PIPELINE,
