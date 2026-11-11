@@ -173,21 +173,27 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
     scored = [r for r in records if r["verified"] and r["correct"] is not None]
     errors = [r for r in records if r["predicted"] == "error"]
 
+    # An accepted "unclear" (mna+dividend or ambiguous case) is a correct
+    # hand-off to a human, not a miss: it is left out of per-label precision /
+    # recall and counted on its own (decided 2026-11-11).
+    to_human = [r for r in scored if r["predicted"] == "unclear" and r["correct"]]
+    labelled = [r for r in scored if not (r["predicted"] == "unclear" and r["correct"])]
+
     per_label: dict[str, dict[str, Optional[float]]] = {}
     for label in SUPPORTED:
         tp = sum(
             1
-            for r in scored
+            for r in labelled
             if r["predicted"] == label and label in r["gold_projected"]
         )
         fp = sum(
             1
-            for r in scored
+            for r in labelled
             if r["predicted"] == label and label not in r["gold_projected"]
         )
         fn = sum(
             1
-            for r in scored
+            for r in labelled
             if label in r["gold_projected"] and r["predicted"] != label
         )
         per_label[label] = {
@@ -219,6 +225,7 @@ def summarize(records: list[dict[str, Any]]) -> dict[str, Any]:
         "n_scored_verified": len(scored),
         "accuracy_verified": _rate(sum(r["correct"] for r in scored), len(scored)),
         "per_label": per_label,
+        "unclear_accepted": len(to_human),
         "none_specificity": _rate(
             sum(1 for r in negatives if r["predicted"] == "none"), len(negatives)
         ),

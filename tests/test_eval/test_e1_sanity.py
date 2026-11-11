@@ -158,22 +158,15 @@ async def test_gold_as_output_scores_100_percent(tmp_path, monkeypatch) -> None:
     assert s["input_coverage_verified"] == 1.0  # gold evidence sits in the window
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Open decision (2026-11-11): accuracy accepts 'unclear' on mna+dividend "
-        "and ambiguous cases, but per-label recall counts it as a miss, so a "
-        "perfect answer gives mna recall 0.667. Does not affect runs 1-2 (no "
-        "verified multi/ambiguous case)."
-    ),
-)
 async def test_gold_as_output_has_perfect_per_label_recall(
     tmp_path, monkeypatch
 ) -> None:
     out = await _run(tmp_path, monkeypatch, lambda p: CASES[_case_in(p)]["answer"])
     s = out["summary"]
+    # accepted "unclear" (C5 mna+dividend) is a hand-off, not a miss
     assert s["per_label"]["mna"]["recall"] == 1.0
     assert s["per_label"]["dividend"]["recall"] == 1.0
+    assert s["unclear_accepted"] == 1
 
 
 async def test_constant_none_scores_only_where_none_is_acceptable(
