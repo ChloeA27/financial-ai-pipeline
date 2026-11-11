@@ -177,19 +177,19 @@ _add_classification_stage(workflow, on_accept="extractor")   # shared with build
 #   reader → classifier;  classifier ⇄ classification_validator
 #   (route_after_classifier, route_after_classification_validation)
 workflow.add_node("extractor", extractor_node)
-workflow.add_node("validator", validator_node)
+workflow.add_node("extraction_validator", extraction_validator_node)
 
 # Self-correction edge #1: schema-parse failures retry without the Validator
 workflow.add_conditional_edges(
     source="extractor",
     path=route_after_extraction,
-    path_map={"validator": "validator", "extractor": "extractor", END: END},
+    path_map={"extraction_validator": "extraction_validator", "extractor": "extractor", END: END},
 )
 
 # Self-correction edge #2: rule failures retry via the Extractor
 workflow.add_conditional_edges(
-    source="validator",
-    path=route_after_validation,
+    source="extraction_validator",
+    path=route_after_extraction_validation,
     path_map={
         "extractor": "extractor",   # retry loop
         END: END,                   # successful exit
@@ -224,7 +224,7 @@ Defined as a `TypedDict` in `src/schemas/state.py`; the audit records it carries
 ### 3.3 Conditional Edge Routers (`src/workflows/edges.py`)
 
 ```python
-def route_after_validation(state: PipelineState) -> Literal["extractor", "__end__", "error"]:
+def route_after_extraction_validation(state: PipelineState) -> Literal["extractor", "__end__", "error"]:
 ```
 
 Three exit paths:
@@ -667,7 +667,7 @@ Those are the only **required** changes. Three further registries are optional, 
 
 | Registry | Without an entry |
 |----------|------------------|
-| `_VALIDATION_RULESETS` / `_ALLOWED_VALUES` in `src/nodes/validator.py` | The Validator passes the document silently (only schema-level checks apply) |
+| `_VALIDATION_RULESETS` / `_ALLOWED_VALUES` in `src/nodes/extraction_validator.py` | The Extraction Validator passes the document silently (only schema-level checks apply) |
 | `COLLECTION_MAP` in `src/rag/chroma_client.py` | No RAG for this type: retrieval returns nothing and the vector write is logged as a non-fatal error |
 | `FIELD_TYPE_MAP` in `scripts/evaluate.py` | New fields fall back to case-insensitive text comparison in the golden eval |
 
@@ -1010,7 +1010,7 @@ financial-ai-pipeline/
 │   │   ├── input_window.py       ← classifier input strategies (head / structured / keyword)
 │   │   ├── classification_validator.py ← code checks on the classification
 │   │   ├── extractor.py          ← LLM extraction + Registry
-│   │   ├── validator.py          ← Rule-based quality gate
+│   │   ├── extraction_validator.py ← Rule-based quality gate for extraction results
 │   │   ├── retry.py              ← Shared retry bookkeeping (classify + extract loops)
 │   │   └── step_runs.py          ← per-execution audit records (silver layer)
 │   │

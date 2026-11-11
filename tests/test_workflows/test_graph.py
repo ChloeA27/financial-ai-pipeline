@@ -13,7 +13,7 @@ from src.workflows.edges import (
     route_after_classification_validation,
     route_after_classifier,
     route_after_extraction,
-    route_after_validation,
+    route_after_extraction_validation,
 )
 from src.workflows.graph import build_pipeline, run_pipeline
 
@@ -24,7 +24,7 @@ from src.workflows.graph import build_pipeline, run_pipeline
 
 
 class TestRouteAfterValidation:
-    """Unit tests for the route_after_validation conditional edge function."""
+    """Unit tests for the route_after_extraction_validation conditional edge function."""
 
     def test_passed_goes_to_end(self) -> None:
         state: dict[str, Any] = {
@@ -33,7 +33,7 @@ class TestRouteAfterValidation:
             "max_retries": 3,
             "error": None,
         }
-        result = route_after_validation(state)
+        result = route_after_extraction_validation(state)
         assert result == "__end__"
 
     def test_failed_still_has_retries(self) -> None:
@@ -44,7 +44,7 @@ class TestRouteAfterValidation:
             "max_retries": 3,
             "error": None,
         }
-        result = route_after_validation(state)
+        result = route_after_extraction_validation(state)
         assert result == "extractor"
 
     def test_last_allowed_retry_still_runs(self) -> None:
@@ -55,7 +55,7 @@ class TestRouteAfterValidation:
             "max_retries": 3,
             "error": None,
         }
-        assert route_after_validation(state) == "extractor"
+        assert route_after_extraction_validation(state) == "extractor"
 
     def test_budget_overrun_without_error_flag_routes_to_error(self) -> None:
         state = {
@@ -64,16 +64,16 @@ class TestRouteAfterValidation:
             "max_retries": 3,
             "error": None,
         }
-        assert route_after_validation(state) == "error"
+        assert route_after_extraction_validation(state) == "error"
 
     def test_exhausted_flag_set_by_node_routes_to_error(self) -> None:
         state = {
             "validation_passed": False,
             "retry_count": 3,
             "max_retries": 3,
-            "error": "validator_node: max retries (3) exhausted.",
+            "error": "extraction_validator_node: max retries (3) exhausted.",
         }
-        assert route_after_validation(state) == "error"
+        assert route_after_extraction_validation(state) == "error"
 
     def test_fatal_error_routes_to_error(self) -> None:
         """Fatal error takes precedence over validation status."""
@@ -83,7 +83,7 @@ class TestRouteAfterValidation:
             "max_retries": 3,
             "error": "Something went wrong",
         }
-        result = route_after_validation(state)
+        result = route_after_extraction_validation(state)
         assert result == "error"
 
     def test_max_retries_at_boundary(self) -> None:
@@ -94,7 +94,7 @@ class TestRouteAfterValidation:
             "max_retries": 3,
             "error": None,
         }
-        result = route_after_validation(state)
+        result = route_after_extraction_validation(state)
         assert result == "extractor"
 
     def test_max_retries_one_below_limit(self) -> None:
@@ -105,7 +105,7 @@ class TestRouteAfterValidation:
             "max_retries": 3,
             "error": None,
         }
-        result = route_after_validation(state)
+        result = route_after_extraction_validation(state)
         assert result == "extractor"
 
     def test_validation_none_with_no_error(self) -> None:
@@ -117,7 +117,7 @@ class TestRouteAfterValidation:
             "error": None,
         }
         # validation_passed is None → treated as falsy → check retries
-        result = route_after_validation(state)
+        result = route_after_extraction_validation(state)
         assert result == "extractor"
 
     def test_validation_passed_is_false_with_retries_left(self) -> None:
@@ -128,7 +128,7 @@ class TestRouteAfterValidation:
             "max_retries": 3,
             "error": None,
         }
-        result = route_after_validation(state)
+        result = route_after_extraction_validation(state)
         assert result == "extractor"
 
 
@@ -140,7 +140,7 @@ class TestRouteAfterValidation:
 class TestRouteAfterExtraction:
     def test_normal_success_goes_to_validator(self) -> None:
         state = {"validation_passed": None, "retry_count": 0, "max_retries": 3}
-        assert route_after_extraction(state) == "validator"
+        assert route_after_extraction(state) == "extraction_validator"
 
     def test_parse_failure_with_budget_retries_extractor(self) -> None:
         state = {"validation_passed": False, "retry_count": 1, "max_retries": 3}
@@ -308,7 +308,7 @@ class TestGraphSelfCorrection:
         assert result["validation_passed"] is False
         assert result["retry_count"] == 3
         assert len(result["correction_logs"]) == 4
-        assert "validator_node: max retries (3) exhausted" in result["error"]
+        assert "extraction_validator_node: max retries (3) exhausted" in result["error"]
         assert fake.queue == []
 
     # ── classify loop ──

@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from src.nodes.validator import (
+from src.nodes.extraction_validator import (
     _check_non_empty,
     _check_positive,
     _check_range,
@@ -20,7 +20,7 @@ from src.nodes.validator import (
     _check_amount_requires_currency,
     _check_not_all_empty,
     _run_rule,
-    validator_node,
+    extraction_validator_node,
 )
 
 
@@ -391,16 +391,16 @@ class TestRunRule:
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  Node-level tests: validator_node
+#  Node-level tests: extraction_validator_node
 # ═══════════════════════════════════════════════════════════════════
 
 
 class TestValidatorNode:
-    """Test the validator_node function with various PipelineState inputs."""
+    """Test the extraction_validator_node function with various PipelineState inputs."""
 
     async def test_manda_passes(self, sample_pipeline_state: dict[str, Any]) -> None:
         """Clean M&A data should pass all validation rules."""
-        result = await validator_node(sample_pipeline_state)
+        result = await extraction_validator_node(sample_pipeline_state)
         assert result.get("validation_passed") is True
         assert result.get("error") is None
 
@@ -411,7 +411,7 @@ class TestValidatorNode:
         state = dict(sample_pipeline_state)
         state["extracted_data"] = dict(state["extracted_data"])
         state["extracted_data"]["acquirer"] = ""
-        result = await validator_node(state)
+        result = await extraction_validator_node(state)
         assert result.get("validation_passed") is False
         assert result.get("retry_count") == 1
         logs = result.get("correction_logs", [])
@@ -425,7 +425,7 @@ class TestValidatorNode:
         state["extracted_data"] = dict(state["extracted_data"])
         state["extracted_data"]["acquirer"] = "Company A"
         state["extracted_data"]["target"] = "Company A"
-        result = await validator_node(state)
+        result = await extraction_validator_node(state)
         assert result.get("validation_passed") is False
         logs = result.get("correction_logs", [])
         assert len(logs) == 1
@@ -436,7 +436,7 @@ class TestValidatorNode:
         self, dividend_pipeline_state: dict[str, Any]
     ) -> None:
         """Clean Dividend data should pass all validation rules."""
-        result = await validator_node(dividend_pipeline_state)
+        result = await extraction_validator_node(dividend_pipeline_state)
         assert result.get("validation_passed") is True
 
     async def test_dividend_timeline_fail(
@@ -458,7 +458,7 @@ class TestValidatorNode:
         # Flip ex-div before declaration — only this pair violates
         state["extracted_data"]["ex_dividend_date"] = "2026-04-01"
         state["extracted_data"]["declaration_date"] = "2026-04-30"
-        result = await validator_node(state)
+        result = await extraction_validator_node(state)
         assert result.get("validation_passed") is False
         logs = result.get("correction_logs", [])
         assert len(logs) == 1  # Only timeline_order should fail
@@ -470,7 +470,7 @@ class TestValidatorNode:
         state = dict(dividend_pipeline_state)
         state["extracted_data"] = dict(state["extracted_data"])
         state["extracted_data"]["currency"] = None
-        result = await validator_node(state)
+        result = await extraction_validator_node(state)
         assert result.get("validation_passed") is False
         logs = result.get("correction_logs", [])
         assert any("currency" in log["error_summary"].lower() for log in logs)
@@ -491,7 +491,7 @@ class TestValidatorNode:
             "dividend_type": None,
             "frequency": None,
         }
-        result = await validator_node(state)
+        result = await extraction_validator_node(state)
         assert result.get("validation_passed") is False
         logs = result.get("correction_logs", [])
         assert any("empty" in log["error_summary"].lower() for log in logs)
@@ -502,7 +502,7 @@ class TestValidatorNode:
         """If extracted_data is None, validator should set error."""
         state = dict(sample_pipeline_state)
         state["extracted_data"] = None
-        result = await validator_node(state)
+        result = await extraction_validator_node(state)
         assert result.get("validation_passed") is False
         assert "extracted_data" in (result.get("error") or "")
 
@@ -512,7 +512,7 @@ class TestValidatorNode:
         """No rules registered for doc_type → pass silently."""
         state = dict(sample_pipeline_state)
         state["doc_type"] = "Unknown"
-        result = await validator_node(state)
+        result = await extraction_validator_node(state)
         assert result.get("validation_passed") is True
         assert "No validation rules" in (result.get("validation_report") or "")
 
@@ -525,7 +525,7 @@ class TestValidatorNode:
         state["extracted_data"]["acquirer"] = ""
         state["retry_count"] = 3  # all 3 allowed retries already performed
         state["max_retries"] = 3
-        result = await validator_node(state)
+        result = await extraction_validator_node(state)
         assert result.get("validation_passed") is False
         assert result.get("retry_count") == 3  # clamped, not 4
         logs = result.get("correction_logs", [])
@@ -542,7 +542,7 @@ class TestValidatorNode:
         state["extracted_data"]["acquirer"] = ""
         state["retry_count"] = 2
         state["max_retries"] = 3
-        result = await validator_node(state)
+        result = await extraction_validator_node(state)
         assert result.get("retry_count") == 3
         assert result.get("error") is None
 
@@ -555,7 +555,7 @@ class TestValidatorNode:
         state["extracted_data"]["acquirer"] = ""
         state["extracted_data"]["target"] = ""
         state["extracted_data"]["total_value_usd"] = -1.0
-        result = await validator_node(state)
+        result = await extraction_validator_node(state)
         assert result.get("validation_passed") is False
         logs = result.get("correction_logs", [])
         assert len(logs) >= 1
@@ -570,5 +570,5 @@ class TestValidatorNode:
         """If state already has error, validator should skip."""
         state = dict(sample_pipeline_state)
         state["error"] = "Previous node failed"
-        result = await validator_node(state)
+        result = await extraction_validator_node(state)
         assert result == {}  # No-op

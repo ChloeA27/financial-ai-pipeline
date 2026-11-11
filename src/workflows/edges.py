@@ -74,7 +74,7 @@ def route_after_classification_validation(
 
 def route_after_extraction(
     state: PipelineState,
-) -> Literal["validator", "extractor", "__end__"]:
+) -> Literal["extraction_validator", "extractor", "__end__"]:
     """
     Decide where to go after the Extractor Node finishes.
 
@@ -82,22 +82,22 @@ def route_after_extraction(
       parse failures)                        → END
     - ``validation_passed == False``         → the LLM output could not even be
       parsed into the schema; the Extractor already logged the correction
-      cycle, so skip the Validator and retry (or end) via the shared router.
-    - otherwise                              → Validator
+      cycle, so skip the Extraction Validator and retry (or end) via the shared router.
+    - otherwise                              → Extraction Validator
     """
     if state.get("error"):
         return END
     if state.get("validation_passed") is False:
-        route = route_after_validation(state)
+        route = route_after_extraction_validation(state)
         return END if route == "error" else route
-    return "validator"
+    return "extraction_validator"
 
 
-def route_after_validation(
+def route_after_extraction_validation(
     state: PipelineState,
 ) -> Literal["extractor", "__end__", "error"]:
     """
-    Decide where to go after the Validator Node finishes.
+    Decide where to go after the Extraction Validator Node finishes.
 
     - validation_passed == True  → END (document is good, output)
     - validation_passed == False & retry_count <= max_retries

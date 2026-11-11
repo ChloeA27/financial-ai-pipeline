@@ -108,7 +108,7 @@ def failed_extraction_state() -> dict[str, Any]:
             {"cycle": 2, "error_summary": "Target missing", "raw_feedback": "..."},
             {"cycle": 3, "error_summary": "Still missing", "raw_feedback": "..."},
         ],
-        "error": "validator_node: max retries (3) exhausted.",
+        "error": "extraction_validator_node: max retries (3) exhausted.",
         "max_retries": 3,
         "extracted_data": None,
     }

@@ -27,7 +27,7 @@ class TestGenuineRejections:
         p, ok, _ = _score(
             doc_type="M&A",
             validation_passed=False,
-            error="validator_node: max retries (3) exhausted.",
+            error="extraction_validator_node: max retries (3) exhausted.",
         )
         assert (p, ok) == (1, True)
 

@@ -8,7 +8,7 @@ For M&A documents, the LLM fills a lightweight ``MandaExtraction`` model
 This two-model pattern means:
   - The LLM never has to guess pipeline-controlled fields (doc_id, metadata, …)
   - If the LLM omits business fields, Pydantic defaults to None gracefully
-  - The Validator later enforces business rules and triggers self-correction
+  - The Extraction Validator later enforces business rules and triggers self-correction
 
 ---
 
@@ -218,7 +218,7 @@ async def extractor_node(state: PipelineState) -> dict:
 
         # ── Step 3: Serialise to dict for state ──
         # validation_passed is reset so a stale False from a previous
-        # attempt can't make the post-extraction router skip the Validator.
+        # attempt can't make the post-extraction router skip the Extraction Validator.
         return {
             "extracted_data": final_result.model_dump(mode="json"),
             "validation_passed": None,
@@ -302,7 +302,7 @@ def _parse_failure_update(
     """
     Build the state update for an LLM output that failed schema parsing.
 
-    Goes through the same ``register_failure`` bookkeeping as the Validator,
+    Goes through the same ``register_failure`` bookkeeping as the Extraction Validator,
     so the router treats both kinds of failure identically.
     """
     summary = summarise_validation_error(exc)

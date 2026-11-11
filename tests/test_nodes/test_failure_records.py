@@ -11,7 +11,7 @@ import pytest
 
 from src.nodes.reader import reader_node
 from src.nodes.retry import register_classification_failure, register_failure
-from src.nodes.validator import validator_node
+from src.nodes.extraction_validator import extraction_validator_node
 from src.schemas.failure import fallback_failure, make_failure
 
 
@@ -25,7 +25,7 @@ class TestValidatorFailureAttribution:
         self, sample_pipeline_state: dict[str, Any]
     ) -> None:
         sample_pipeline_state["extracted_data"]["target"] = ""
-        update = await validator_node(sample_pipeline_state)
+        update = await extraction_validator_node(sample_pipeline_state)
         assert update["validation_passed"] is False
         assert "failure" not in update  # only terminal exits carry one
         assert "error" not in update
@@ -34,7 +34,7 @@ class TestValidatorFailureAttribution:
         self, sample_pipeline_state: dict[str, Any]
     ) -> None:
         sample_pipeline_state["extracted_data"]["target"] = None
-        update = await validator_node(_exhausted(sample_pipeline_state))
+        update = await extraction_validator_node(_exhausted(sample_pipeline_state))
 
         failure = update["failure"]
         assert failure["stage"] == "validate"
@@ -45,7 +45,7 @@ class TestValidatorFailureAttribution:
         self, sample_pipeline_state: dict[str, Any]
     ) -> None:
         sample_pipeline_state["extracted_data"]["payment_method"] = "bitcoin"
-        update = await validator_node(_exhausted(sample_pipeline_state))
+        update = await extraction_validator_node(_exhausted(sample_pipeline_state))
 
         assert update["failure"]["code"] == "PAYMENT_METHOD.ALLOWED_VALUES"
         assert update["failure"]["category"] == "structure"
@@ -55,7 +55,7 @@ class TestValidatorFailureAttribution:
     ) -> None:
         # Payment before declaration: breaks the timeline invariant.
         dividend_pipeline_state["extracted_data"]["payment_date"] = "2026-01-01"
-        update = await validator_node(_exhausted(dividend_pipeline_state))
+        update = await extraction_validator_node(_exhausted(dividend_pipeline_state))
 
         assert update["failure"]["code"] == "TIMELINE_ORDER"
         assert update["failure"]["category"] == "business_rule"
@@ -66,7 +66,7 @@ class TestValidatorFailureAttribution:
         data = sample_pipeline_state["extracted_data"]
         data["target"] = None  # CRITICAL
         data["payment_method"] = "bitcoin"  # LOW
-        update = await validator_node(_exhausted(sample_pipeline_state))
+        update = await extraction_validator_node(_exhausted(sample_pipeline_state))
 
         failure = update["failure"]
         assert failure["code"] == "TARGET.NON_EMPTY"
@@ -77,14 +77,14 @@ class TestValidatorFailureAttribution:
         self, sample_pipeline_state: dict[str, Any]
     ) -> None:
         sample_pipeline_state["extracted_data"] = None
-        update = await validator_node(sample_pipeline_state)
+        update = await extraction_validator_node(sample_pipeline_state)
         assert update["failure"]["code"] == "NO_EXTRACTED_DATA"
         assert update["failure"]["stage"] == "validate"
 
     async def test_passing_document_has_no_failure(
         self, sample_pipeline_state: dict[str, Any]
     ) -> None:
-        update = await validator_node(sample_pipeline_state)
+        update = await extraction_validator_node(sample_pipeline_state)
         assert update["validation_passed"] is True
         assert "failure" not in update
 

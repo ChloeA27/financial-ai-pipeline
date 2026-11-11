@@ -19,7 +19,7 @@ class PipelineState(TypedDict):
     """
     Global state flowing through the LangGraph computation graph.
 
-        Reader → Classifier ⇄ Classification Validator → Extractor ⇄ Validator
+        Reader → Classifier ⇄ Classification Validator → Extractor ⇄ Extraction Validator
                  (classify loop)                          (extract loop)
 
     Reducers: ``step_runs`` is appended to (``operator.add``); every other key,
@@ -81,12 +81,12 @@ class PipelineState(TypedDict):
     `None` until the Extractor Node has run successfully.
     """
 
-    # ── Validation (set by Validator Node) ──
+    # ── Validation (set by Extraction Validator Node) ──
     validation_passed: Optional[bool]
     """Whether the extraction passed all quality checks."""
 
     validation_report: Optional[str]
-    """Detailed report from the Validator (JSON or free-text)."""
+    """Detailed report from the Extraction Validator (JSON or free-text)."""
 
     correction_logs: list[CorrectionLog]
     """History of all self-correction cycles for this document."""

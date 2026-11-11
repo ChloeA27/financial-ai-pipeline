@@ -17,7 +17,7 @@ NODE_MODULES = {
     "classifier",
     "classification_validator",
     "extractor",
-    "validator",
+    "extraction_validator",
 }
 
 

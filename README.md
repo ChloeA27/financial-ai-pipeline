@@ -68,8 +68,8 @@ raw_data/*.txt
       │ extracted_data         ▲
       ▼                        │ on validated pass
  ┌──────────┐                  │
- │ Validator│──────────────────┘
- │  Agent   │  self-correction loop ← ─ ─ ─ ─ ─ ─
+ │Extraction│──────────────────┘
+ │Validator │  plain code, no LLM; self-correction loop ← ─ ─
  └────┬─────┘                                  │
       │ (pass/fail)                             │
       ▼                                         │
@@ -269,7 +269,7 @@ financial-ai-pipeline/
 │   │   ├── input_window.py         ← classifier input strategies (head / structured / keyword)
 │   │   ├── classification_validator.py ← code checks on the classification (no LLM)
 │   │   ├── extractor.py            ← LLM extraction + registry pattern
-│   │   ├── validator.py            ← rule-based quality gate
+│   │   ├── extraction_validator.py ← rule-based quality gate for extraction results
 │   │   ├── retry.py                ← shared retry bookkeeping (classify + extract loops)
 │   │   └── step_runs.py            ← per-execution audit records
 │   │

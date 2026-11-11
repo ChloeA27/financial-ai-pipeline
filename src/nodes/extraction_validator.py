@@ -1,5 +1,5 @@
 """
-Validator Node — doc_type-aware rule-based quality gate for extraction results.
+Extraction Validator Node — doc_type-aware rule-based quality gate for extraction results.
 
 Each document type has its own set of validation rules registered in
 ``_VALIDATION_RULESETS``. When no ruleset exists for a given doc_type,
@@ -8,7 +8,7 @@ already caught structural errors at parse time.
 
 Architecture — Registry Pattern (mirrors the Extractor):
   - Add a new ruleset dict for a new doc_type
-  - The Validator Node function is generic — zero code changes
+  - The Extraction Validator Node function is generic — zero code changes
 
 On failure: increments retry_count, appends to correction_logs,
 and provides structured feedback for the next extraction attempt.
@@ -518,7 +518,7 @@ def _describe_failures(
 # ====================================================================
 
 
-async def validator_node(state: PipelineState) -> dict:
+async def extraction_validator_node(state: PipelineState) -> dict:
     """
     LangGraph Node: validate extraction data against doc_type-specific rules.
 
@@ -541,7 +541,7 @@ async def validator_node(state: PipelineState) -> dict:
     attempt = current_attempt(state, LOOP_EXTRACT)
     extracted_data: dict[str, Any] | None = state.get("extracted_data")
     if not extracted_data:
-        message = "validator_node: no extracted_data found in state."
+        message = "extraction_validator_node: no extracted_data found in state."
         failure = make_failure(STAGE_VALIDATE, NO_EXTRACTED_DATA, CAT_UNKNOWN, message)
         return {
             "validation_passed": False,
@@ -606,7 +606,7 @@ async def validator_node(state: PipelineState) -> dict:
         # ── Self-correction: log the failure, spend one retry (or give up) ──
         max_retries = state.get("max_retries", 3)
         exhausted = (
-            f"validator_node: max retries ({max_retries}) exhausted. "
+            f"extraction_validator_node: max retries ({max_retries}) exhausted. "
             f"Document failed all correction cycles."
         )
         code, category, entries = _describe_failures(failed_rules, extracted_data)

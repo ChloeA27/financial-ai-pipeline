@@ -18,9 +18,9 @@ Topology::
       │  budget spent         → END (DLQ: stage classify / classify_validate)
       ▼
     Extractor  ◄───────────────┐   extract loop (own retry budget):
-      │                        │   schema-parse failures skip the Validator,
-      ▼                        │   rule failures come back from it
-    Validator ─────────────────┘
+      │                        │   schema-parse failures skip the
+      ▼                        │   Extraction Validator, rule failures
+    Extraction Validator ──────┘   come back from it
       │  passed       → END (stored)
       │  budget spent → END (DLQ: stage extract / validate)
 
@@ -37,13 +37,13 @@ from src.nodes.classification_validator import classification_validator_node
 from src.nodes.classifier import classifier_node
 from src.nodes.extractor import extractor_node
 from src.nodes.reader import reader_node
-from src.nodes.validator import validator_node
+from src.nodes.extraction_validator import extraction_validator_node
 from src.schemas.state import PipelineState
 from src.workflows.edges import (
     route_after_classification_validation,
     route_after_classifier,
     route_after_extraction,
-    route_after_validation,
+    route_after_extraction_validation,
 )
 
 
@@ -94,23 +94,23 @@ def build_pipeline():
     _add_classification_stage(workflow, on_accept="extractor")
 
     workflow.add_node("extractor", extractor_node)
-    workflow.add_node("validator", validator_node)
+    workflow.add_node("extraction_validator", extraction_validator_node)
 
     # Extract loop
-    #   after extraction: schema-parse failures retry without the Validator
+    #   after extraction: schema-parse failures retry without the Extraction Validator
     workflow.add_conditional_edges(
         source="extractor",
         path=route_after_extraction,
         path_map={
-            "validator": "validator",
+            "extraction_validator": "extraction_validator",
             "extractor": "extractor",
             END: END,
         },
     )
     #   after validation: rule failures retry via the Extractor
     workflow.add_conditional_edges(
-        source="validator",
-        path=route_after_validation,
+        source="extraction_validator",
+        path=route_after_extraction_validation,
         path_map={
             "extractor": "extractor",
             END: END,
@@ -123,7 +123,7 @@ def build_pipeline():
 def build_classification_graph():
     """
     The classification stage alone: Reader → Classifier ⇄ Classification
-    Validator → END.  Same nodes and the same routers as the full pipeline
+    Extraction Validator → END.  Same nodes and the same routers as the full pipeline
     (an accepted M&A / Dividend label ends the run instead of moving on to
     the Extractor), so E1 evaluates the real classification code path.
     """
