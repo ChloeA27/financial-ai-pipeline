@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from src.config import settings
-from src.graph.builder import run_pipeline
+from src.workflows.graph import run_pipeline
 from src.nodes.extractor import EXTRACTOR_MODELS
 from src.rag.chroma_client import override_chroma_path
 

@@ -260,7 +260,8 @@ financial-ai-pipeline/
 │   ├── dashboard.py               ← Streamlit monitoring UI (pipeline.db)
 │   ├── e1_dashboard.py            ← Streamlit UI for E1 runs (results/e1/)
 │   │
-│   ├── graph/builder.py           ← LangGraph StateGraph construction
+│   ├── workflows/edges.py         ← routing functions (where to go next)
+│   ├── workflows/graph.py         ← wiring: nodes + edges → compiled StateGraph
 │   │
 │   ├── nodes/
 │   │   ├── reader.py               ← async file I/O + SHA-256 hashing
@@ -295,7 +296,7 @@ financial-ai-pipeline/
 │       └── repository.py            ← raw + gold/DLQ + step_runs persistence
 │
 └── tests/                          ← unit + integration tests, mirrors src/
-    ├── test_nodes/  test_graph/  test_storage/  test_llm/  test_rag/
+    ├── test_nodes/  test_workflows/  test_storage/  test_llm/  test_rag/
     ├── test_schemas/  test_prompts/  test_eval/  test_cli/  test_viz/
     ├── fake_embedding.py           ← offline embedder used by the test suite
     └── conftest.py                 ← markers + per-test vector-store / raw-store isolation

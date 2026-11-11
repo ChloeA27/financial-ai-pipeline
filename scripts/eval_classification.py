@@ -327,7 +327,7 @@ def _record(
 
 
 async def run_real(args: argparse.Namespace, cases: list[e1.Case]) -> Path:
-    from src.graph.builder import build_classification_graph
+    from src.workflows.graph import build_classification_graph
     from src.nodes.reader import read_single_file
     from src.storage.db import init_db
     from src.storage.repository import ExtractionRepository

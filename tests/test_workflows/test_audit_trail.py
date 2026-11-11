@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from src.graph.builder import run_pipeline
+from src.workflows.graph import run_pipeline
 from src.storage.db import get_connection, init_db
 from src.storage.raw_store import read_raw
 from src.storage.repository import ExtractionRepository
@@ -239,7 +239,7 @@ class TestPersistedAuditTrail:
 
 class TestClassificationOnlyGraph:
     async def test_accepted_label_ends_before_extraction(self, scripted) -> None:
-        from src.graph.builder import build_classification_graph
+        from src.workflows.graph import build_classification_graph
         from src.nodes.reader import read_single_file
 
         fake, path = scripted

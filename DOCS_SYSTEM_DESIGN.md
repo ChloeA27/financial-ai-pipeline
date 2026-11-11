@@ -162,36 +162,34 @@ Output that does not even parse into the extraction schema (bad enum, malformed 
 
 ### 3.1 Graph Definition
 
-The pipeline is compiled as a `StateGraph` with `PipelineState` as its schema:
+The pipeline is compiled as a `StateGraph` with `PipelineState` as its schema. Three layers keep the work, the decisions and the wiring apart. A unit test (`tests/test_workflows/test_layering.py`) enforces the boundaries:
+
+| Layer | Where | Does | Must not |
+|---|---|---|---|
+| Nodes | `src/nodes/*.py` | the work: read, call the LLM, validate. Return a state update | decide what runs next, or import another node |
+| Edges | `src/workflows/edges.py` | pure routing functions: state in, name of the next node out | call node code |
+| Graph | `src/workflows/graph.py` | wiring: register nodes, attach routers, compile | contain routing logic |
 
 ```python
-# src/graph/builder.py
+# src/workflows/graph.py
 workflow = StateGraph(state_schema=PipelineState)
-workflow.add_node("reader", reader_node)
-workflow.add_node("classifier", classifier_node)
-workflow.add_node("classification_validator", classification_validator_node)
+_add_classification_stage(workflow, on_accept="extractor")   # shared with build_classification_graph()
+#   reader → classifier;  classifier ⇄ classification_validator
+#   (route_after_classifier, route_after_classification_validation)
 workflow.add_node("extractor", extractor_node)
 workflow.add_node("validator", validator_node)
-
-workflow.set_entry_point("reader")
-workflow.add_edge("reader", "classifier")     # linear forward
-
-# Classify loop: unparsable output / bad evidence quote → retry the Classifier
-workflow.add_conditional_edges("classifier", _route_after_classifier, {...})
-workflow.add_conditional_edges("classification_validator",
-                               _route_after_classification_validation, {...})
 
 # Self-correction edge #1: schema-parse failures retry without the Validator
 workflow.add_conditional_edges(
     source="extractor",
-    path=_route_after_extraction,
+    path=route_after_extraction,
     path_map={"validator": "validator", "extractor": "extractor", END: END},
 )
 
 # Self-correction edge #2: rule failures retry via the Extractor
 workflow.add_conditional_edges(
     source="validator",
-    path=_route_after_validation,
+    path=route_after_validation,
     path_map={
         "extractor": "extractor",   # retry loop
         END: END,                   # successful exit
@@ -223,10 +221,10 @@ Defined as a `TypedDict` in `src/schemas/state.py`; the audit records it carries
 
 > **Note:** RAG context is retrieved inside the Extractor Node — it is **not** stored in `PipelineState`. On the first pass the Extractor calls `await retrieve_context(doc_type, query_text, exclude_file_path=file_path)`, prepends the result to the user prompt, and discards it after generation. This keeps the state schema lean and avoids serialising embedding vectors through the graph.
 
-### 3.3 Conditional Edge Router
+### 3.3 Conditional Edge Routers (`src/workflows/edges.py`)
 
 ```python
-def _route_after_validation(state: PipelineState) -> Literal["extractor", "__end__", "error"]:
+def route_after_validation(state: PipelineState) -> Literal["extractor", "__end__", "error"]:
 ```
 
 Three exit paths:
@@ -236,7 +234,7 @@ Three exit paths:
 
 `retry_count` is the number of retries already *performed*, so with `max_retries = 3` a document is extracted at most four times (first attempt + 3 retries). The node that records the last allowed failure (`src/nodes/retry.py::register_failure`) leaves `retry_count` at `max_retries` and sets `error`, which is what sends the document to the DLQ. The router's own `retry_count > max_retries` check is only a defensive backstop.
 
-Two further routers cover the classify loop (`_route_after_classifier`, `_route_after_classification_validation`): an unparsable classification skips the Classification Validator and retries, a rejected one retries until `classify_retry_count > classify_max_retries`, and `none` / `unclear` (accepted but terminal, with `error` set) end the run. The classify and extract loops keep separate counters, so one cannot consume the other's budget.
+Two further routers cover the classify loop (`route_after_classifier`, `route_after_classification_validation`): an unparsable classification skips the Classification Validator and retries, a rejected one retries until `classify_retry_count > classify_max_retries`, and `none` / `unclear` (accepted but terminal, with `error` set) end the run. The classify and extract loops keep separate counters, so one cannot consume the other's budget.
 
 A second conditional edge sits **after the Extractor**: if the LLM's output does not even parse into the schema (bad enum, malformed date, out-of-range number, invalid JSON), the Extractor logs a correction cycle itself and the router sends it straight back for another attempt, skipping the Validator. Transport / API failures remain fatal.
 
@@ -1002,8 +1000,9 @@ financial-ai-pipeline/
 │   ├── dashboard.py              ← Streamlit monitoring UI (pipeline.db)
 │   ├── e1_dashboard.py           ← Streamlit UI for E1 runs (results/e1/)
 │   │
-│   ├── graph/
-│   │   └── builder.py            ← LangGraph StateGraph construction
+│   ├── workflows/
+│   │   ├── edges.py              ← routing functions (state in, next node out)
+│   │   └── graph.py              ← wiring: nodes + edges → compiled StateGraph
 │   │
 │   ├── nodes/
 │   │   ├── reader.py             ← async file I/O
@@ -1064,7 +1063,7 @@ financial-ai-pipeline/
 ├── tests/                        ← mirrors src/
 │   ├── conftest.py               ← Markers + autouse vector-store / raw-store isolation
 │   ├── fake_embedding.py         ← Offline deterministic embedding function
-│   ├── test_graph/               ← Routers, scripted-LLM whole-graph runs, audit trail, layering rules
+│   ├── test_workflows/           ← Routers, scripted-LLM whole-graph runs, audit trail, layering rules
 │   ├── test_cli/                 ← Batch mode, concurrency, crash handling
 │   ├── test_eval/                ← Golden-eval scoring, E1 scoring and runner
 │   ├── test_nodes/               ← One file per node + input windows, retries, failure records

@@ -52,8 +52,23 @@ def test_schemas_do_not_depend_on_nodes() -> None:
     schemas = NODES_DIR.parent / "schemas"
     bad = {
         str(p.relative_to(schemas)): sorted(
-            m for m in _imports(p) if m.startswith(("src.nodes", "src.graph"))
+            m for m in _imports(p) if m.startswith(("src.nodes", "src.workflows"))
         )
         for p in schemas.rglob("*.py")
+    }
+    assert {k: v for k, v in bad.items() if v} == {}
+
+
+def test_edges_only_route() -> None:
+    # Routers read state and name the next node; they never call node code.
+    edges = NODES_DIR.parent / "workflows" / "edges.py"
+    assert not [m for m in _imports(edges) if m.startswith("src.nodes")]
+
+
+def test_nodes_do_not_import_the_workflow() -> None:
+    # A node returns a state update; it never decides or wires what runs next.
+    bad = {
+        p.stem: sorted(m for m in _imports(p) if m.startswith("src.workflows"))
+        for p in NODES_DIR.glob("*.py")
     }
     assert {k: v for k, v in bad.items() if v} == {}

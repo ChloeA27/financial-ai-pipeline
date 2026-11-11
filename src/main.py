@@ -17,7 +17,7 @@ from typing import Optional
 
 from loguru import logger
 
-from src.graph.builder import run_pipeline
+from src.workflows.graph import run_pipeline
 from src.nodes.reader import read_directory
 from src.schemas.failure import (
     CAT_UNKNOWN,
