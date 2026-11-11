@@ -55,7 +55,7 @@ class TestReadSingleFile:
     async def test_read_existing_file(self) -> None:
         """Should read file content and return a valid PipelineState."""
         # Use an existing sample file
-        sample = "raw_data/sample/test_ma_pass.txt"
+        sample = "evals/datasets/golden/inputs/test_ma_pass.txt"
         if not os.path.exists(sample):
             pytest.skip(f"Sample file not found: {sample}")
 
@@ -66,7 +66,7 @@ class TestReadSingleFile:
 
     async def test_resolves_absolute_path(self) -> None:
         """file_path in state should be an absolute path."""
-        sample = "raw_data/sample/test_ma_pass.txt"
+        sample = "evals/datasets/golden/inputs/test_ma_pass.txt"
         if not os.path.exists(sample):
             pytest.skip(f"Sample file not found: {sample}")
 
@@ -96,7 +96,7 @@ class TestReadDirectory:
 
     async def test_reads_all_txt_files(self) -> None:
         """Should return one state per .txt file in the directory."""
-        sample_dir = "raw_data/sample"
+        sample_dir = "evals/datasets/golden/inputs"
         if not os.path.isdir(sample_dir):
             pytest.skip(f"Sample directory not found: {sample_dir}")
 
@@ -113,7 +113,7 @@ class TestReadDirectory:
             assert expected in file_names
 
     async def test_all_states_have_raw_content(self) -> None:
-        sample_dir = "raw_data/sample"
+        sample_dir = "evals/datasets/golden/inputs"
         if not os.path.isdir(sample_dir):
             pytest.skip(f"Sample directory not found: {sample_dir}")
 
@@ -167,7 +167,7 @@ class TestReaderNode:
 
     async def test_langgraph_node_reads_file(self) -> None:
         """If raw_content is missing, reader_node should read from disk."""
-        sample = "raw_data/sample/test_ma_pass.txt"
+        sample = "evals/datasets/golden/inputs/test_ma_pass.txt"
         if not os.path.exists(sample):
             pytest.skip(f"Sample file not found: {sample}")
 

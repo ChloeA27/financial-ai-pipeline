@@ -154,7 +154,9 @@ async def read_single_file(file_path: str) -> PipelineState:
     )
 
 
-async def read_directory(raw_dir: str = "raw_data/sample") -> list[PipelineState]:
+async def read_directory(
+    raw_dir: str = "evals/datasets/golden/inputs",
+) -> list[PipelineState]:
     """
     Scan a directory for ``.txt`` files and read every one concurrently.
 

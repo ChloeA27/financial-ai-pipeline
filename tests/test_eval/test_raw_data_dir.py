@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "evaluate.py"
+_SCRIPT = Path(__file__).resolve().parents[2] / "evals" / "run_golden.py"
 _spec = importlib.util.spec_from_file_location("evaluate_script_rd", _SCRIPT)
 evaluate = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(evaluate)  # type: ignore[union-attr]

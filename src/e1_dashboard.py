@@ -80,9 +80,7 @@ def _style(fig):
 
 runs = d.list_runs(RESULTS)
 if not runs:
-    st.warning(
-        f"No E1 runs found under {RESULTS}. Run scripts/eval_classification.py first."
-    )
+    st.warning(f"No E1 runs found under {RESULTS}. Run evals/run_e1.py first.")
     st.stop()
 
 with st.sidebar:

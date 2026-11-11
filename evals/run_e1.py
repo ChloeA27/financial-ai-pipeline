@@ -14,11 +14,11 @@ Modes:
 
 Usage::
 
-    python scripts/eval_classification.py --dataset <E1 dir>/e1_dataset_draft.jsonl \\
+    python evals/run_e1.py --dataset <E1 dir>/e1_dataset_draft.jsonl \\
         --coverage-only
     # or set E1_DATASET=<E1 dir>/e1_dataset_draft.jsonl in .env and omit --dataset
-    python scripts/eval_classification.py --dataset ... --estimate
-    python scripts/eval_classification.py --dataset ... --variants head,structured,keyword \\
+    python evals/run_e1.py --dataset ... --estimate
+    python evals/run_e1.py --dataset ... --variants head,structured,keyword \\
         --reps 2 --temperature 0 --max-calls 400
 
 The test split is refused unless --allow-test is given: it must not be run
@@ -51,7 +51,7 @@ ENV_FILE = REPO_ROOT / ".env"
 sys.path.insert(0, str(REPO_ROOT))
 
 from src.config import settings  # noqa: E402
-from src.evaluation import e1  # noqa: E402
+from evals.evaluators import e1  # noqa: E402
 from src.nodes.input_window import (  # noqa: E402
     CHARS_PER_TOKEN,
     STRATEGIES,

@@ -1,6 +1,7 @@
 # E1 runs: classification-stage evaluation
 
-Each folder holds one run of `scripts/eval_classification.py`. The folder name is
+Each folder holds one run of `evals/run_e1.py` (called `scripts/eval_classification.py`
+until 2026-11-11, when every run listed below was made). The folder name is
 `<UTC timestamp>_<tag>`. Runs are never edited or deleted after the fact. A run that
 turned out to be wrong stays here with a `SUPERSEDED.md` note.
 

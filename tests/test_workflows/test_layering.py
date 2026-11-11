@@ -72,3 +72,13 @@ def test_nodes_do_not_import_the_workflow() -> None:
         for p in NODES_DIR.glob("*.py")
     }
     assert {k: v for k, v in bad.items() if v} == {}
+
+
+def test_production_code_does_not_depend_on_evals() -> None:
+    # Evaluation code may use the pipeline; the pipeline never imports evals/.
+    src = NODES_DIR.parent
+    bad = {
+        str(p.relative_to(src)): sorted(m for m in _imports(p) if m.startswith("evals"))
+        for p in src.rglob("*.py")
+    }
+    assert {k: v for k, v in bad.items() if v} == {}

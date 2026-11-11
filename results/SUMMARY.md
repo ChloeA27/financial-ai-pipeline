@@ -17,8 +17,10 @@ Every number below comes from a rerunnable script. Raw outputs live under `resul
 | `ea0d32c`, `fd9869d` | Repo tidy: tests mirror `src/`; docs match the current layout; index of E1 runs. |
 | `f5fb99b` | E1 runner reads the dataset path from `E1_DATASET` (the dataset stays outside the repo and is only read). |
 | `b0db1ee` | **Classifier thinking mode off by default** (`CLASSIFY_THINKING=disabled`), found by the first E1 run (below). |
+| `8d35d12` | E1 run 2 (thinking off) and the iteration notes. |
+| `c554157` … `ef8aad0`, then the `evals/` move | Layered structure, moves only (no behaviour change): prompts in `src/prompts/templates/` (byte-identical, same prompt fingerprint); contracts in `src/schemas/`; routing (`src/workflows/edges.py`) split from wiring (`graph.py`); `validator` renamed `extraction_validator`; evaluation in a top-level `evals/` (datasets, evaluators, `run_golden.py`, `run_e1.py`). Layering rules enforced by `tests/test_workflows/test_layering.py`. |
 
-Unit tests: 216 → 419 (no LLM calls). `black --check` clean. CI on Python 3.11 not yet run for this branch.
+Unit tests: 216 → 431 (no LLM calls). `black --check` clean. CI on Python 3.11 not yet run for this branch.
 
 ## E1 — classification stage
 

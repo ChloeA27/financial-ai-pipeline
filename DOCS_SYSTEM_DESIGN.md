@@ -56,7 +56,7 @@ Traditional approaches (regex scraping, template-based parsers) fail because:
 | **G7 — Async Concurrency** | Batch-processing N documents must not degrade to serial execution; each file runs its own independent LangGraph state machine. | `asyncio.Semaphore` + `asyncio.gather`; wall-clock time < N × single-file time |
 | **G8 — Operation Visibility** | Streamlit dashboard exposes KPI cards, error panels, and audit-trail drill-downs querying the live database. | Dashboard visible at `http://localhost:8501` |
 | **G9 — RAG-Augmented Extraction** | Historical validated extractions are embedded and stored in ChromaDB (per doc-type collection). On first-pass extraction, semantically similar past results are retrieved as few-shot context to improve LLM accuracy. | ChromaDB collection row count; retrieval relevance |
-| **G10 — CI Golden Dataset Gate** | Every push/PR must pass a golden dataset evaluation (field-type-aware comparison against hand-labelled expected outputs) with a configurable accuracy threshold. Pipeline regressions fail the build before deployment. | GitHub Actions CI; `scripts/evaluate.py --threshold 0.85` exit code check |
+| **G10 — CI Golden Dataset Gate** | Every push/PR must pass a golden dataset evaluation (field-type-aware comparison against hand-labelled expected outputs) with a configurable accuracy threshold. Pipeline regressions fail the build before deployment. | GitHub Actions CI; `evals/run_golden.py --threshold 0.85` exit code check |
 
 ### 1.3 Non-Goals
 
@@ -77,7 +77,7 @@ Traditional approaches (regex scraping, template-based parsers) fail because:
                    ┌──────────────────────────────────────────┐
                    │          BOUNDARY OF THIS PIPELINE        │
                    │                                          │
- raw_data/*.txt ──►│  Reader → Classifier → Class.Val. →      │──► extractions (SCD2)
+ source *.txt   ──►│  Reader → Classifier → Class.Val. →      │──► extractions (SCD2)
                    │  Extractor → Validator  ↻ (2 loops)      │──► JSON files
                    │                                          │──► dead_letter_queue
                    └──────────────────────────────────────────┘
@@ -97,7 +97,7 @@ The Financial AI Pipeline is an industrial-grade **multi-agent extraction platfo
 ### 2.1 High-Level Flow
 
 ```
-raw_data/*.txt
+source *.txt
       │
       ▼
  ┌──────────┐
@@ -669,7 +669,7 @@ Those are the only **required** changes. Three further registries are optional, 
 |----------|------------------|
 | `_VALIDATION_RULESETS` / `_ALLOWED_VALUES` in `src/nodes/extraction_validator.py` | The Extraction Validator passes the document silently (only schema-level checks apply) |
 | `COLLECTION_MAP` in `src/rag/chroma_client.py` | No RAG for this type: retrieval returns nothing and the vector write is logged as a non-fatal error |
-| `FIELD_TYPE_MAP` in `scripts/evaluate.py` | New fields fall back to case-insensitive text comparison in the golden eval |
+| `FIELD_TYPE_MAP` in `evals/evaluators/golden.py` | New fields fall back to case-insensitive text comparison in the golden eval |
 
 ### 9.2 Registration Points
 
@@ -730,7 +730,7 @@ Recorded with every check but never used to pass or reject: the quote's `offset`
 
 **Thinking mode off for the classifier** (`CLASSIFY_THINKING=disabled`, sent as DeepSeek's `{"thinking": {"type": "disabled"}}`; empty = not sent, for other providers). With thinking on (the `deepseek-flash` default), hidden reasoning counts toward `max_tokens` and truncated 26 of 233 replies at 1,024 tokens in the first E1 run, and temperature is ignored. With thinking off, no reply exceeded 166 tokens (see `results/e1/README.md`).
 
-Each classifier `step_runs` record carries the window statistics (strategy, characters total / sent, sections, truncated), the temperature, thinking mode, `max_tokens` and any reported reasoning tokens, so a miss can be attributed to "evidence never in the window" versus "model saw it and judged wrongly". *Input coverage* — the share of gold evidence quotes inside the window — is computable without any LLM call (`scripts/eval_classification.py --coverage-only`).
+Each classifier `step_runs` record carries the window statistics (strategy, characters total / sent, sections, truncated), the temperature, thinking mode, `max_tokens` and any reported reasoning tokens, so a miss can be attributed to "evidence never in the window" versus "model saw it and judged wrongly". *Input coverage* — the share of gold evidence quotes inside the window — is computable without any LLM call (`evals/run_e1.py --coverage-only`).
 
 A failure writes the error type into the retry feedback and sends the document back to the Classifier (budget `classify_max_retries`, default 2 → three attempts in total). When the budget is spent the document goes to the DLQ with stage `classify_validate` and the code of the last failure. The Classifier's own `confidence` is stored but deliberately **not** used as a gate: it is a generated number, not a calibrated probability. The quote check only proves the quoted words exist in the document — it does not prove the label is right.
 
@@ -839,7 +839,8 @@ Without a regression safety net, a change to the Extractor prompt, Validator rul
 ### 11.2 Directory Structure
 
 ```
-golden/
+evals/datasets/golden/
+├── inputs/                      ← source .txt files, one per golden file
 ├── expected_pass/               ← Pipeline must produce ≥85% accuracy
 │   ├── dividend_apple_2026.golden.json
 │   ├── ma_microsoft_activision.golden.json
@@ -849,9 +850,9 @@ golden/
     └── test_ma_fail_loop.golden.json
 ```
 
-### 11.3 Eval Engine — `scripts/evaluate.py`
+### 11.3 Eval Engine — `evals/evaluators/golden.py`, run by `evals/run_golden.py`
 
-The evaluator runs each golden file through the pipeline with its SQLite and ChromaDB paths pointed at a temp directory, then compares the output against the golden JSON using a **field-type-aware comparison engine**. Each field's mode comes from `FIELD_TYPE_MAP` in `scripts/evaluate.py` (default: `text_lower`):
+The evaluator runs each golden file through the pipeline with its SQLite and ChromaDB paths pointed at a temp directory, then compares the output against the golden JSON using a **field-type-aware comparison engine**. Each field's mode comes from `FIELD_TYPE_MAP` in `evals/evaluators/golden.py` (default: `text_lower`):
 
 | Mode | Match Rule | Example Fields |
 |------|-----------|----------------|
@@ -869,7 +870,7 @@ The evaluator runs each golden file through the pipeline with its SQLite and Chr
 | `mode: "date_range"` + `range_start` / `range_end` | Any date inside the (inclusive) range passes |
 | `mode: "fuzzy_match"` + `threshold` (default 0.85) | `difflib.SequenceMatcher` ratio ≥ threshold, for names with minor variations |
 
-Example from `golden/expected_pass/test_ma_pass.golden.json`:
+Example from `evals/datasets/golden/expected_pass/test_ma_pass.golden.json`:
 
 ```json
 {
@@ -888,7 +889,7 @@ The reported accuracy is `passed checks / total checks` pooled over all golden f
 
 ### 11.4 Expected-Fail Mode
 
-Documents in `golden/expected_fail/` are known to contain corrupt/insufficient data. The evaluator only checks that the pipeline **legitimately rejected** the document:
+Documents in `evals/datasets/golden/expected_fail/` are known to contain corrupt/insufficient data. The evaluator only checks that the pipeline **legitimately rejected** the document:
 1. `validation_passed == False` (retries exhausted), or
 2. the Classifier succeeded but labelled the document `none` / `unclear` (or any type with no registered extractor), or
 3. a classification or extraction loop ran out of retries on output that never passed validation.
@@ -910,9 +911,9 @@ jobs:
       - name: Check LLM secret availability   # see below
       - name: Golden dataset evaluation
         if: steps.llm.outputs.available == 'true'
-        run: python scripts/evaluate.py --threshold 0.85 --json
+        run: python evals/run_golden.py --threshold 0.85 --json
       - name: Lint check (black)
-        run: black --check --diff src/ tests/ scripts/
+        run: black --check --diff src/ tests/ evals/
 ```
 
 Three gates, sequential:
@@ -967,28 +968,22 @@ financial-ai-pipeline/
 ├── requirements*.txt             ← runtime / dev / dashboard dependencies
 ├── .env                          ← Secrets (LLM API key, etc.) — copy from .env.example
 │
-├── raw_data/
-│   └── sample/                   ← Test fixtures
-│       ├── ma_microsoft_activision.txt
-│       ├── test_ma_pass.txt
-│       ├── test_ma_fail_loop.txt
-│       └── dividend_apple_2026.txt
-│
-├── scripts/
-│   ├── evaluate.py               ← Golden dataset evaluation runner (end-to-end extraction)
-│   └── eval_classification.py    ← E1 classification-stage evaluation runner
+├── evals/                        ← probabilistic evaluation (tests/ stays deterministic)
+│   ├── datasets/
+│   │   ├── golden/
+│   │   │   ├── inputs/           ← 4 sample announcements (.txt)
+│   │   │   ├── expected_pass/    ← <name>.golden.json: fields to extract
+│   │   │   └── expected_fail/    ← <name>.golden.json: documents to reject
+│   │   └── e1/README.md          ← E1 set is kept outside the repo (blind labels, size)
+│   ├── evaluators/
+│   │   ├── golden.py             ← field-type-aware comparison, expected_fail scoring
+│   │   └── e1.py                 ← gold projection, coverage, McNemar, repetition agreement
+│   ├── run_golden.py             ← CI quality gate (end-to-end extraction)
+│   └── run_e1.py                 ← classification-stage experiments
 │
 ├── results/
 │   ├── SUMMARY.md                ← State of the project and the latest measured numbers
 │   └── e1/                       ← One folder per E1 run (index: results/e1/README.md)
-│
-├── golden/
-│   ├── expected_pass/            ← Pipeline must produce ≥85% accuracy
-│   │   ├── dividend_apple_2026.golden.json
-│   │   ├── ma_microsoft_activision.golden.json
-│   │   └── test_ma_pass.golden.json
-│   └── expected_fail/            ← Pipeline must reject the document
-│       └── test_ma_fail_loop.golden.json
 │
 ├── .github/workflows/
 │   └── ci.yml                    ← CI gates: unit tests → golden eval → lint

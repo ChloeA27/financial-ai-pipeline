@@ -147,7 +147,7 @@ async def run_pipeline(file_path: str) -> PipelineState:
 
     Usage::
 
-        result = await run_pipeline("raw_data/sample/ma_microsoft_activision.txt")
+        result = await run_pipeline("evals/datasets/golden/inputs/ma_microsoft_activision.txt")
         print(result["validation_passed"])
         print(result["extracted_data"])
     """

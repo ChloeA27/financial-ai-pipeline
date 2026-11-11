@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from src.evaluation import e1
+from evals.evaluators import e1
 
 
 def _case(labels, *, ambiguous=False, acceptable=None, verified=True, group="typical"):

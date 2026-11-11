@@ -5,19 +5,13 @@ An infrastructure error (LLM unreachable, ...) must not look like success.
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "evaluate.py"
-_spec = importlib.util.spec_from_file_location("evaluate_script", _SCRIPT)
-evaluate = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(evaluate)  # type: ignore[union-attr]
+from evals.evaluators.golden import eval_expected_fail
 
 
 def _score(**state) -> tuple[int, bool, str]:
-    passed, total, [d] = evaluate._eval_expected_fail({}, state)
+    passed, total, [d] = eval_expected_fail({}, state)
     assert total == 1
     return passed, d["passed"], d["detail"]
 

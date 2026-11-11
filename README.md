@@ -40,7 +40,7 @@ Currently supports two document types (**M&A**, **Dividend**) via a registry pat
 ## 🏗️ Architecture
 
 ```
-raw_data/*.txt
+source *.txt
       │
       ▼
  ┌──────────┐
@@ -116,7 +116,7 @@ Failure stages recorded in the DLQ: `read`, `classify`, `classify_validate`, `ex
 | **RAG-Augmented Extraction** | ChromaDB collection per document type; embeddings via local `SentenceTransformer` (`all-MiniLM-L6-v2`); only validated extractions are embedded; superseded versions are de-indexed and a file is never retrieved as its own example; first-pass extraction only (retries reuse the same context). Off by default (`RAG_ENABLED=false`) |
 | **Async Concurrency** | `asyncio.Semaphore` + `asyncio.gather` — batch mode runs each file's LangGraph state machine independently and concurrently |
 | **Operation Visibility** | Streamlit dashboard (`src/dashboard.py`) reads `data/pipeline.db` live for KPI cards, a Dead Letter panel, and per-`doc_id` self-correction audit drill-downs |
-| **CI Golden Dataset Gate** | `scripts/evaluate.py` runs the full pipeline against hand-labelled golden JSON files with a field-type-aware comparison engine, gating the build on a configurable accuracy threshold |
+| **CI Golden Dataset Gate** | `evals/run_golden.py` runs the full pipeline against hand-labelled golden JSON files with a field-type-aware comparison engine, gating the build on a configurable accuracy threshold |
 
 ---
 
@@ -174,13 +174,13 @@ cp .env.example .env
 ### Run on a single file
 
 ```bash
-python -m src.main --file raw_data/sample/ma_microsoft_activision.txt
+python -m src.main --file evals/datasets/golden/inputs/ma_microsoft_activision.txt
 ```
 
 ### Run on a directory (concurrent batch mode)
 
 ```bash
-python -m src.main --dir raw_data/sample --concurrency 5
+python -m src.main --dir evals/datasets/golden/inputs --concurrency 5
 ```
 
 ### Launch the monitoring dashboard
@@ -201,7 +201,7 @@ pytest -m "not integration" --tb=short -q
 ### Run the golden dataset evaluation
 
 ```bash
-python scripts/evaluate.py --threshold 0.85
+python evals/run_golden.py --threshold 0.85
 ```
 
 ### Run the classification-stage evaluation (E1)
@@ -212,11 +212,11 @@ Point the runner at the dataset once in `.env` (`E1_DATASET=<E1>/e1_dataset_draf
 
 ```bash
 # no LLM calls: is the gold evidence inside each strategy's window?
-python scripts/eval_classification.py --coverage-only
+python evals/run_e1.py --coverage-only
 # no LLM calls: planned calls and tokens
-python scripts/eval_classification.py --estimate
+python evals/run_e1.py --estimate
 # real run: head / structured / keyword, 2 repetitions, temperature 0
-python scripts/eval_classification.py --reps 2 --max-calls 630
+python evals/run_e1.py --reps 2 --max-calls 630
 ```
 
 Browse a run (variant comparison, outcome funnel, per-document trace with the classifier's window and the model's evidence quote highlighted). Served on localhost only (`.streamlit/config.toml`); cases that are not human-verified are hidden in the trace unless you opt in:
@@ -237,14 +237,12 @@ financial-ai-pipeline/
 ├── DOCS_SYSTEM_DESIGN.md         ← Full system design white paper
 ├── README.md                     ← You are here
 │
-├── raw_data/sample/               ← Sample .txt announcements
-├── golden/
-│   ├── expected_pass/            ← Golden files pipeline must extract correctly
-│   └── expected_fail/            ← Golden files pipeline must reject
-│
-├── scripts/
-│   ├── evaluate.py                ← Golden dataset evaluation runner (end-to-end)
-│   └── eval_classification.py     ← E1 classification-stage evaluation runner
+├── evals/                         ← probabilistic evaluation (see evals/README.md)
+│   ├── datasets/golden/           ← inputs/ + expected_pass/ + expected_fail/
+│   ├── datasets/e1/README.md      ← E1 classification set lives outside the repo
+│   ├── evaluators/                ← golden.py (field comparison), e1.py (classification scoring)
+│   ├── run_golden.py              ← CI quality gate: end-to-end extraction
+│   └── run_e1.py                  ← classification-stage experiments
 │
 ├── results/
 │   ├── SUMMARY.md                 ← Project state + latest measured numbers
@@ -286,7 +284,6 @@ financial-ai-pipeline/
 │   ├── prompts/                     ← prompt assets: templates/*.md + registry.py loader
 │   │
 │   ├── utils/hashing.py             ← SHA-256 content hash (shared key)
-│   ├── evaluation/e1.py             ← E1 scoring: gold projection, coverage, McNemar
 │   ├── viz/e1_data.py               ← data shaping for e1_dashboard.py (unit-tested)
 │   │
 │   └── storage/
@@ -310,6 +307,7 @@ financial-ai-pipeline/
 |----------|---------|
 | [DOCS_SYSTEM_DESIGN.md](./DOCS_SYSTEM_DESIGN.md) | Full system design white paper — graph topology, two-model isolation, idempotency defense, SCD2 versioning, self-correction loop, RAG architecture, CI golden-dataset gate, concurrency model |
 | [results/SUMMARY.md](./results/SUMMARY.md) | Current state of the project, latest measured evaluation numbers, open issues |
+| [evals/README.md](./evals/README.md) | Evaluation suite: datasets, evaluators, how to run the golden gate and E1 |
 | [results/e1/README.md](./results/e1/README.md) | Index of E1 evaluation runs and how a run folder is laid out |
 
 ---
@@ -317,7 +315,7 @@ financial-ai-pipeline/
 ## 🧪 Testing & CI
 
 - **400+ unit tests** across nodes, schemas, storage, graph routing, the RAG layer and the evaluation code (`pytest -m "not integration"`, no LLM calls). Each test gets a private vector store and an offline fake embedder; add `and not real_embedder` to skip the few tests that load the real model: `pytest -m "not integration and not real_embedder"`
-- **Golden dataset evaluation** (`scripts/evaluate.py`) runs the full pipeline end-to-end against hand-labelled expected outputs using a field-type-aware comparison engine (`enum`, `numeric` ±1 %, `bool`, `date`, `text_lower`; per-field overrides `date_range`, `fuzzy_match` with custom thresholds, `accept_null`)
+- **Golden dataset evaluation** (`evals/run_golden.py`) runs the full pipeline end-to-end against hand-labelled expected outputs using a field-type-aware comparison engine (`enum`, `numeric` ±1 %, `bool`, `date`, `text_lower`; per-field overrides `date_range`, `fuzzy_match` with custom thresholds, `accept_null`)
 - **GitHub Actions CI** (`.github/workflows/ci.yml`) runs three sequential gates on every push to `main` and every pull request into it: unit tests → golden evaluation → `black` lint check. The golden evaluation needs the `DEEPSEEK_API_KEY` secret: it is skipped (with a warning) on fork PRs, but a push without the secret fails the build
 
 ---
