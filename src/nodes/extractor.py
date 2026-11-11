@@ -29,6 +29,7 @@ from pydantic import ValidationError
 
 from src.config import settings
 from src.llm.client import LLMCallInfo, LLMClient
+from src.prompts import load_prompt
 from src.rag.retriever import retrieve_context
 from src.schemas.base import Metadata
 from src.schemas.extraction.dividend import DividendExtraction, DividendExtractionResult
@@ -61,41 +62,16 @@ from src.state.pipeline_state import PipelineState
 #  Registry — add a new doc_type by inserting ONE line in each dict
 # ════════════════════════════════════════════════════════════════════════
 
+# System prompts are assets: src/prompts/templates/extractor_<type>_system.md
 EXTRACTOR_PROMPTS: dict[str, str] = {
-    "M&A": """You are a financial data extractor for US SEC filings.
-Extract the Merger & Acquisition details from the announcement below.
-
-Respond with valid JSON containing ONLY these fields (all optional, use null if unknown):
-- acquirer  = the buying entity (full legal name).
-- target    = the company or assets being acquired.
-- total_value_usd = numeric only (no $ signs or commas). Use null if not found.
-- stake_percentage = numeric % (0.0–100.0). Use 100.0 for full acquisition.
-- requires_shareholder_approval = true / false. Use null if not mentioned.
-- payment_method = one of: "Cash", "Stock", "Cash + Stock", "Asset Swap", "Other".
-- announcement_date = YYYY-MM-DD format.
-- expected_close_date = YYYY-MM-DD format, or null if not stated.""",
-    "Dividend": """You are a financial data extractor for corporate dividend announcements.
-Extract the dividend distribution details from the announcement below.
-
-Respond with valid JSON containing ONLY these fields (all optional, use null if unknown):
-- ticker = stock ticker symbol (e.g. AAPL, MSFT).
-- declaration_date = date the board declared the dividend in YYYY-MM-DD format.
-- dividend_cash_amount = Gross (pre-tax) cash amount per share (numeric only, no currency symbols). Extract ONLY the pre-tax gross amount.
-- currency = ISO 4217 three-letter currency code (e.g. USD, EUR, HKD).
-- record_date = record / holders-of-record date in YYYY-MM-DD format.
-- ex_dividend_date = ex-dividend date in YYYY-MM-DD format.
-- payment_date = dividend payment / payable date in YYYY-MM-DD format.
-- dividend_type = one of: "Regular Cash", "Special Cash", "Stock", "Property".
-- frequency = one of: "Quarterly", "Monthly", "Semi-Annual", "Annual", "One-time".""",
+    "M&A": load_prompt("extractor_ma_system"),
+    "Dividend": load_prompt("extractor_dividend_system"),
 }
 
 
 def _get_default_prompt(doc_type: str) -> str:
     """Fallback prompt for unhandled document types."""
-    return (
-        f"Extract all structured financial data from this {doc_type} announcement. "
-        "Respond with valid JSON containing only business fields."
-    )
+    return load_prompt("extractor_default_system", doc_type=doc_type)
 
 
 # ── LLM-facing model (pure business fields, no traceability) ──

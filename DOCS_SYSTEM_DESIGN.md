@@ -690,28 +690,31 @@ EXTRACTOR_RESULT_MODELS: dict[str, type] = {
     "Dividend": DividendExtractionResult,   # ← add one line
 }
 
-# ── System prompt for the LLM ──
+# ── System prompt for the LLM (text lives in src/prompts/templates/) ──
 EXTRACTOR_PROMPTS: dict[str, str] = {
-    "M&A": """...""",
-    "Dividend": """...""",                  # ← add one line
+    "M&A": load_prompt("extractor_ma_system"),
+    "Dividend": load_prompt("extractor_dividend_system"),   # ← add one line + one .md file
 }
 ```
+
+**Prompts are assets, not code.** Every system prompt is a Markdown file in `src/prompts/templates/`, loaded by `src/prompts/registry.py` (`load_prompt(name, **params)`). The loader returns the file without its final newline, so the text sent is byte-for-byte what the file holds. Parameters use `string.Template` placeholders (`$doc_type`) and must all be given. A prompt's version is its content: `LLMClient` records `prompt_version = sha256(system message actually sent)[:12]` on every call, so any edit to a template or to the output schema shows up in `step_runs` and in E1 results.
 
 ### 9.3 Classifier Compatibility
 
 The Classifier node (`src/nodes/classifier.py`) is **prompt-driven**. Its output is constrained to an enum (`Literal["M&A", "Dividend", "none", "unclear"]`) plus a verbatim `evidence_quote`; any other string fails Pydantic parsing and goes through the classify loop instead of silently reaching the Extractor.
 
-```python
-SYSTEM_PROMPT = """... exactly ONE label:
+```text
+# src/prompts/templates/classifier_system.md (excerpt)
+... exactly ONE label:
 - "M&A"      — announces or reports an ACTUAL merger, acquisition, asset purchase or tender offer.
 - "Dividend" — announces or reports an ACTUAL dividend declaration or distribution.
 - "none"     — clearly neither (earnings, executive changes, buybacks, litigation, rumours / speculation).
-- "unclear"  — might be M&A or Dividend but cannot be decided (mixed events, truncated, contradictory)."""
+- "unclear"  — might be M&A or Dividend but cannot be decided (mixed events, truncated, contradictory).
 ```
 
 `none` and `unclear` are deliberately separate: `none` is an expected out-of-scope outcome, `unclear` means a human should look. `Management_Change` is **not** a label yet — those documents currently come back as `none` and can be given their own label (and extractor) later.
 
-To add a new document type: list it in the prompt, add it to the `DocLabel` literal and `SUPPORTED_DOC_TYPES` in `classifier.py`, and register it in the Extractor dictionaries. A unit test fails if `SUPPORTED_DOC_TYPES` and the Extractor registry drift apart.
+To add a new document type: list it in `classifier_system.md`, add it to the `DocLabel` literal and `SUPPORTED_DOC_TYPES` in `classifier.py`, and register it in the Extractor dictionaries. A unit test fails if `SUPPORTED_DOC_TYPES` and the Extractor registry drift apart.
 
 **Classification Validator** (`src/nodes/classification_validator.py`, plain code, no LLM) checks, for `M&A` / `Dividend`:
 1. *structure* — the label is one of the known labels;
@@ -1035,6 +1038,10 @@ financial-ai-pipeline/
 │   ├── llm/
 │   │   └── client.py             ← OpenAI-SDK client (DeepSeek-compatible) + JSON parsing
 │   │
+│   ├── prompts/
+│   │   ├── registry.py           ← load_prompt(): verbatim load, strict $param rendering
+│   │   └── templates/            ← classifier_system.md, extractor_<type>_system.md
+│   │
 │   ├── utils/
 │   │   └── hashing.py            ← SHA-256 content hash (shared key)
 │   │
@@ -1065,6 +1072,7 @@ financial-ai-pipeline/
 │   ├── test_llm/                 ← LLM client call records
 │   ├── test_rag/                 ← Vector store + retriever
 │   ├── test_schemas/             ← Two-model contracts
+│   ├── test_prompts/             ← Template loading and rendering
 │   └── test_viz/                 ← E1 dashboard data + headless render
 │
 ├── requirements.txt              ← Runtime dependencies

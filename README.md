@@ -280,6 +280,7 @@ financial-ai-pipeline/
 │   │
 │   ├── rag/                        ← embedder, ChromaDB client, retriever (off by default)
 │   ├── llm/client.py                ← OpenAI-SDK LLM client (DeepSeek-compatible)
+│   ├── prompts/                     ← prompt assets: templates/*.md + registry.py loader
 │   │
 │   ├── utils/hashing.py             ← SHA-256 content hash (shared key)
 │   ├── evaluation/e1.py             ← E1 scoring: gold projection, coverage, McNemar
@@ -293,7 +294,7 @@ financial-ai-pipeline/
 │
 └── tests/                          ← unit + integration tests, mirrors src/
     ├── test_nodes/  test_graph/  test_storage/  test_llm/  test_rag/
-    ├── test_schemas/  test_eval/  test_cli/  test_viz/
+    ├── test_schemas/  test_prompts/  test_eval/  test_cli/  test_viz/
     ├── fake_embedding.py           ← offline embedder used by the test suite
     └── conftest.py                 ← markers + per-test vector-store / raw-store isolation
 ```
