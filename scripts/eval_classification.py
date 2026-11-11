@@ -116,7 +116,11 @@ def _manifest(args: argparse.Namespace, cases: list[e1.Case], mode: str) -> dict
         "guide_versions": sorted({c.guide_version or "?" for c in cases}),
         "projection_rule": e1.PROJECTION_RULE,
         "model": settings.deepseek_model,
+        "thinking": args.thinking or "provider default",
         "temperature": args.temperature,
+        # DeepSeek ignores temperature while thinking is enabled
+        "temperature_applies": args.thinking == "disabled",
+        "max_tokens": settings.classify_max_tokens,
         "budget_tokens": args.budget_tokens,
         "variants": args.variants,
         "reps": args.reps,
@@ -335,6 +339,7 @@ async def run_real(args: argparse.Namespace, cases: list[e1.Case]) -> Path:
     settings.chromadb_path = str(out / "chroma")
     settings.rag_enabled = False
     settings.classify_temperature = args.temperature
+    settings.classify_thinking = args.thinking
     settings.classifier_input_tokens = args.budget_tokens
     await init_db()
     repo = ExtractionRepository()
@@ -462,6 +467,12 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     p.add_argument("--variants", default="head,structured,keyword")
     p.add_argument("--reps", type=int, default=2)
     p.add_argument("--temperature", type=float, default=0.0)
+    p.add_argument(
+        "--thinking",
+        choices=["disabled", "enabled", ""],
+        default=settings.classify_thinking,
+        help='DeepSeek thinking mode for the classifier ("" = provider default)',
+    )
     p.add_argument("--budget-tokens", type=int, default=3500)
     p.add_argument("--concurrency", type=int, default=4)
     p.add_argument("--max-calls", type=int, default=400)

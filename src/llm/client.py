@@ -32,6 +32,8 @@ class LLMCallInfo(TypedDict):
     raw_response: str
     prompt_tokens: Optional[int]
     completion_tokens: Optional[int]
+    reasoning_tokens: Optional[int]
+    """Hidden reasoning tokens inside ``completion_tokens`` (thinking models)."""
     total_tokens: Optional[int]
     latency_ms: int
 
@@ -60,10 +62,20 @@ class LLMClient:
         *,
         temperature: float,
         max_tokens: int,
+        thinking: str = "",
     ) -> str:
-        """Send one chat completion, record ``last_call`` and return the raw text."""
+        """
+        Send one chat completion, record ``last_call`` and return the raw text.
+
+        ``thinking`` ("enabled" / "disabled") is sent as DeepSeek's
+        ``{"thinking": {"type": ...}}`` request field; "" sends nothing, so
+        other OpenAI-compatible providers are unaffected.
+        """
         self.last_call = None
         started = time.perf_counter()
+        extra: dict[str, Any] = {}
+        if thinking:
+            extra["extra_body"] = {"thinking": {"type": thinking}}
         response = await self._client.chat.completions.create(
             model=self._model,
             messages=[
@@ -72,15 +84,18 @@ class LLMClient:
             ],
             temperature=temperature,
             max_tokens=max_tokens,
+            **extra,
         )
         raw_text = response.choices[0].message.content or ""
         usage = getattr(response, "usage", None)
+        details = getattr(usage, "completion_tokens_details", None)
         self.last_call = LLMCallInfo(
             model_name=self._model,
             prompt_version=prompt_fingerprint(system_message),
             raw_response=raw_text,
             prompt_tokens=getattr(usage, "prompt_tokens", None),
             completion_tokens=getattr(usage, "completion_tokens", None),
+            reasoning_tokens=getattr(details, "reasoning_tokens", None),
             total_tokens=getattr(usage, "total_tokens", None),
             latency_ms=int((time.perf_counter() - started) * 1000),
         )
@@ -118,6 +133,7 @@ class LLMClient:
         *,
         temperature: float = 0.1,
         max_tokens: int = 4096,
+        thinking: str = "",
     ) -> object:
         """
         Request structured JSON output and parse into a Pydantic model.
@@ -134,8 +150,9 @@ class LLMClient:
             system_prompt: System-level instruction.
             user_prompt: The user message.
             response_model: A Pydantic BaseModel subclass to parse into.
-            temperature: Sampling temperature.
-            max_tokens: Maximum tokens in the response.
+            temperature: Sampling temperature (ignored by thinking models).
+            max_tokens: Maximum tokens in the response, hidden reasoning included.
+            thinking: "enabled" / "disabled" / "" (see ``_chat``).
 
         Returns:
             An instance of *response_model*.
@@ -150,7 +167,11 @@ class LLMClient:
             f"this schema:\n\n{schema_hint}"
         )
         raw_text = await self._chat(
-            system_message, user_prompt, temperature=temperature, max_tokens=max_tokens
+            system_message,
+            user_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            thinking=thinking,
         )
 
         # Clean the response — strip markdown JSON fences if present

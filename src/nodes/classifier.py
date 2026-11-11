@@ -152,7 +152,12 @@ async def classifier_node(state: PipelineState) -> dict:
         budget_tokens=settings.classifier_input_tokens,
     )
     temperature = settings.classify_temperature
-    call_info = {**window.stats(), "temperature": temperature}
+    call_info = {
+        **window.stats(),
+        "temperature": temperature,
+        "thinking": settings.classify_thinking or "provider default",
+        "max_tokens": settings.classify_max_tokens,
+    }
     user_prompt = f"Classify the following announcement:\n\n{window.text}"
     feedback = _build_classification_feedback(state)
     if feedback:
@@ -168,10 +173,12 @@ async def classifier_node(state: PipelineState) -> dict:
             user_prompt=user_prompt,
             response_model=ClassificationResult,
             temperature=temperature,
-            max_tokens=1024,
+            max_tokens=settings.classify_max_tokens,
+            thinking=settings.classify_thinking,
         )
     except ValidationError as exc:
         # The LLM answered, but not in the required shape — retry with feedback.
+        call_info["reasoning_tokens"] = (client.last_call or {}).get("reasoning_tokens")
         update = _parse_failure_update(state, exc, attempt, client.last_call)
         update["classifier_input"] = window.text
         update["step_runs"][0]["output"]["input"] = call_info
@@ -196,6 +203,7 @@ async def classifier_node(state: PipelineState) -> dict:
     finally:
         await client.close()
 
+    call_info["reasoning_tokens"] = (client.last_call or {}).get("reasoning_tokens")
     classification = {
         "label": result.doc_type,
         "evidence_quote": result.evidence_quote,
