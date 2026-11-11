@@ -1,0 +1,47 @@
+{
+  "calls_used": 1,
+  "stopped_early": false,
+  "wall_seconds": 2.1,
+  "variants": {
+    "head": {
+      "n_runs": 1,
+      "n_scored_verified": 1,
+      "accuracy_verified": 1.0,
+      "per_label": {
+        "mna": {
+          "precision": null,
+          "recall": null,
+          "support": 0
+        },
+        "dividend": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 1
+        }
+      },
+      "none_specificity": null,
+      "by_group": {
+        "typical": {
+          "n_scored": 1,
+          "accuracy": 1.0
+        }
+      },
+      "unclear_rate_non_ambiguous": 0.0,
+      "classify_failed_rate": 0.0,
+      "failed_by_code": {},
+      "first_attempt_quote_pass_rate": 1.0,
+      "classify_retry_rate": 0.0,
+      "input_coverage_verified": 1.0,
+      "input_coverage_n": 1,
+      "errors": 0,
+      "tokens_per_doc_mean": 1681.0,
+      "tokens_total": 1681,
+      "latency_ms_per_doc_mean": 2085,
+      "confusion_verified": {
+        "dividend -> dividend": 1
+      },
+      "rep_agreement": null
+    }
+  },
+  "paired": {}
+}

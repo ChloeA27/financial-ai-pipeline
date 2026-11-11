@@ -1,0 +1,33 @@
+{
+  "mode": "run",
+  "created_at": "2026-11-11T21:19:30.558703+00:00",
+  "dataset": "e1_dataset_draft.jsonl",
+  "dataset_sha256": "9b2832a6cff2797ef417624693f54cb1811f801ccb8e1771be87bafae4d6bbbf",
+  "split": "dev",
+  "guide_versions": [
+    "v0.2"
+  ],
+  "projection_rule": "gold \u2229 {mna, dividend}; empty \u2192 none (mgmt_change-only filings count as none); mna+dividend accepts 'unclear' (single-label classifier)",
+  "model": "deepseek-flash",
+  "thinking": "disabled",
+  "temperature": 0.0,
+  "temperature_applies": true,
+  "max_tokens": 1024,
+  "budget_tokens": 3500,
+  "variants": [
+    "head"
+  ],
+  "reps": 1,
+  "git": {
+    "commit": "f5fb99b439b2169b89cb7dd1aaab252c3216d164",
+    "dirty": true
+  },
+  "cases": [
+    {
+      "case_id": "E1-009",
+      "group": "typical",
+      "verified": true,
+      "input_sha256": "4a7395411a6b8bbd401dc73d078f679440ffce7d6fa3c45bbfa5c055514eb1fe"
+    }
+  ]
+}

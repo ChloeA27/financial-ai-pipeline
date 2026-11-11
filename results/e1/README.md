@@ -11,7 +11,9 @@ turned out to be wrong stays here with a `SUPERSEDED.md` note.
 | `20261110-213902_coverage_orig35` | coverage only (no LLM) | — | 3 × — | 35 | **Superseded:** the first cover-page cut also removed Explanatory Notes. See its `SUPERSEDED.md`. |
 | `20261110-214025_coverage_orig35` | coverage only (no LLM) | — | 3 × — | 35 | Current coverage numbers |
 | `20261110-214813_smoke_flash` | run | `deepseek-flash` | 1 × 1 | 1 | Smoke test only. See its `NOTES.md`. |
-| `20261110-214827_dev35_flash` | run | `deepseek-flash` | 3 × 2 | 35 | **Main result**, reported in `../SUMMARY.md`. See its `NOTES.md`. |
+| `20261110-214827_dev35_flash` | run | `deepseek-flash`, thinking on (default) | 3 × 2 | 35 | Baseline of the iteration below. 26/233 replies were truncated at `max_tokens`, and temperature was not applied. See its `NOTES.md`. |
+| `20261111-211930_smoke_nothink` | run | `deepseek-flash`, thinking off | 1 × 1 | 1 | Smoke test only. See its `NOTES.md`. |
+| `20261111-211954_dev35_flash_nothink` | run | `deepseek-flash`, thinking off | 3 × 2 | 35 | **Current result**, reported in `../SUMMARY.md`. Only change: thinking disabled. See its `NOTES.md`. |
 
 The `model` field in a coverage-only manifest is just the configured default. No model is
 called in that mode.

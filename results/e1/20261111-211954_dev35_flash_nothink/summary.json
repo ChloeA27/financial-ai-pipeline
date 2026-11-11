@@ -1,0 +1,210 @@
+{
+  "calls_used": 216,
+  "stopped_early": false,
+  "wall_seconds": 79.2,
+  "variants": {
+    "head": {
+      "n_runs": 70,
+      "n_scored_verified": 34,
+      "accuracy_verified": 1.0,
+      "per_label": {
+        "mna": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 12
+        },
+        "dividend": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 4
+        }
+      },
+      "none_specificity": 1.0,
+      "by_group": {
+        "confuser": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "format": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "long": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "multi": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "negative": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "typical": {
+          "n_scored": 34,
+          "accuracy": 1.0
+        }
+      },
+      "unclear_rate_non_ambiguous": 0.0,
+      "classify_failed_rate": 0.0,
+      "failed_by_code": {},
+      "first_attempt_quote_pass_rate": 1.0,
+      "classify_retry_rate": 0.0143,
+      "input_coverage_verified": 0.875,
+      "input_coverage_n": 16,
+      "errors": 0,
+      "tokens_per_doc_mean": 1682.0,
+      "tokens_total": 117740,
+      "latency_ms_per_doc_mean": 1341,
+      "confusion_verified": {
+        "dividend -> dividend": 4,
+        "mna -> mna": 12,
+        "none -> none": 18
+      },
+      "rep_agreement": 1.0
+    },
+    "structured": {
+      "n_runs": 70,
+      "n_scored_verified": 34,
+      "accuracy_verified": 1.0,
+      "per_label": {
+        "mna": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 12
+        },
+        "dividend": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 4
+        }
+      },
+      "none_specificity": 1.0,
+      "by_group": {
+        "confuser": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "format": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "long": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "multi": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "negative": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "typical": {
+          "n_scored": 34,
+          "accuracy": 1.0
+        }
+      },
+      "unclear_rate_non_ambiguous": 0.0,
+      "classify_failed_rate": 0.0,
+      "failed_by_code": {},
+      "first_attempt_quote_pass_rate": 0.9355,
+      "classify_retry_rate": 0.0429,
+      "input_coverage_verified": 1.0,
+      "input_coverage_n": 16,
+      "errors": 0,
+      "tokens_per_doc_mean": 2722.8,
+      "tokens_total": 190596,
+      "latency_ms_per_doc_mean": 1444,
+      "confusion_verified": {
+        "dividend -> dividend": 4,
+        "mna -> mna": 12,
+        "none -> none": 18
+      },
+      "rep_agreement": 1.0
+    },
+    "keyword": {
+      "n_runs": 70,
+      "n_scored_verified": 34,
+      "accuracy_verified": 1.0,
+      "per_label": {
+        "mna": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 12
+        },
+        "dividend": {
+          "precision": 1.0,
+          "recall": 1.0,
+          "support": 4
+        }
+      },
+      "none_specificity": 1.0,
+      "by_group": {
+        "confuser": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "format": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "long": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "multi": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "negative": {
+          "n_scored": 0,
+          "accuracy": null
+        },
+        "typical": {
+          "n_scored": 34,
+          "accuracy": 1.0
+        }
+      },
+      "unclear_rate_non_ambiguous": 0.0,
+      "classify_failed_rate": 0.0,
+      "failed_by_code": {},
+      "first_attempt_quote_pass_rate": 0.9394,
+      "classify_retry_rate": 0.0286,
+      "input_coverage_verified": 1.0,
+      "input_coverage_n": 16,
+      "errors": 0,
+      "tokens_per_doc_mean": 2083.6,
+      "tokens_total": 145849,
+      "latency_ms_per_doc_mean": 1448,
+      "confusion_verified": {
+        "dividend -> dividend": 4,
+        "mna -> mna": 12,
+        "none -> none": 18
+      },
+      "rep_agreement": 0.9714
+    }
+  },
+  "paired": {
+    "head vs structured": {
+      "n_paired": 17,
+      "a_right_b_wrong": 0,
+      "a_wrong_b_right": 0,
+      "p_value": 1.0
+    },
+    "head vs keyword": {
+      "n_paired": 17,
+      "a_right_b_wrong": 0,
+      "a_wrong_b_right": 0,
+      "p_value": 1.0
+    },
+    "structured vs keyword": {
+      "n_paired": 17,
+      "a_right_b_wrong": 0,
+      "a_wrong_b_right": 0,
+      "p_value": 1.0
+    }
+  }
+}

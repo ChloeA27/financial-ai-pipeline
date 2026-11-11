@@ -1,60 +1,84 @@
-# Project summary — state as of 2026-11-10
+# Project summary — state as of 2026-11-11
 
 Branch `feat/classification-validation-and-dlq-stages` (not yet merged to `main`).
-Every number below comes from a rerunnable script; raw outputs live under `results/e1/`.
+Every number below comes from a rerunnable script. Raw outputs live under `results/e1/`
+(index: `results/e1/README.md`).
 
-## What changed (2026-11-10)
+## What changed
 
 | Commit | Change |
 |---|---|
-| `9858f4e` | Classify loop: enum labels (`M&A`, `Dividend`, `none`, `unclear`), verbatim `evidence_quote`, a code-only Classification Validator, own retry budget. Stage-tagged DLQ (`failed_stage`, `error_code`, `error_category`, …). Medallion storage: bronze raw store + `documents`, silver `step_runs` (one row per node execution, raw LLM reply, tokens, latency, prompt hash), gold `extractions` with `run_id`. 500-char snippet removed. `RAG_ENABLED=false` by default. |
-| `0e58edc` | Byte-exact ingestion: original bytes stored and hashed before decoding; UTF-8 → Windows-1252 fallback recorded; undecodable/binary files go to the DLQ (`read` / `DECODE_FAILED`) instead of being skipped. |
-| `9490039` | Classifier input strategies `head` (V0, default) / `structured` (V1) / `keyword` (V2); evidence quote checked inside the window actually sent (≥ 25 chars, ≥ 4 words) with diagnostics; E1 runner `scripts/eval_classification.py`. |
-| `d7a23a7` | First E1 run (below); model answers on unverified cases sealed in `_sealed/`. |
+| `9858f4e` | Classify loop: enum labels (`M&A`, `Dividend`, `none`, `unclear`), verbatim `evidence_quote`, a code-only Classification Validator, and its own retry budget. Stage-tagged DLQ (`failed_stage`, `error_code`, `error_category`, …). Medallion storage: bronze raw store + `documents`; silver `step_runs` (one row per node execution with raw LLM reply, tokens, latency, prompt hash); gold `extractions` with `run_id`. 500-char snippet removed. `RAG_ENABLED=false` by default. |
+| `0e58edc` | Byte-exact ingestion: original bytes are stored and hashed before decoding. The UTF-8 → Windows-1252 fallback is recorded. Undecodable or binary files go to the DLQ (`read` / `DECODE_FAILED`) instead of being skipped. |
+| `9490039` | Classifier input strategies `head` (V0, default) / `structured` (V1) / `keyword` (V2). The evidence quote is checked inside the window actually sent (≥ 25 chars, ≥ 4 words), with diagnostics. E1 runner `scripts/eval_classification.py`. |
+| `d7a23a7` | First E1 run. Model answers on unverified cases are sealed in `_sealed/`. |
 | `11ce062` | Fix: concurrent writers of identical content raced on one temporary file in the raw store. |
 | `302625b` | E1 dashboard (`streamlit run src/e1_dashboard.py`): variant comparison, outcome funnel, per-document trace. |
+| `ea0d32c`, `fd9869d` | Repo tidy: tests mirror `src/`; docs match the current layout; index of E1 runs. |
+| `f5fb99b` | E1 runner reads the dataset path from `E1_DATASET` (the dataset stays outside the repo and is only read). |
+| `b0db1ee` | **Classifier thinking mode off by default** (`CLASSIFY_THINKING=disabled`), found by the first E1 run (below). |
 
-Unit tests: 216 → 412 (no LLM calls). `black --check` clean. CI on Python 3.11 not yet run for this branch.
+Unit tests: 216 → 419 (no LLM calls). `black --check` clean. CI on Python 3.11 not yet run for this branch.
 
-## E1 — classification stage, first run
+## E1 — classification stage
 
 35 original dev cases of the E1 SEC EDGAR set (17 human-verified, all in the `typical` group),
-`deepseek-flash`, temperature 0, 2 repetitions per variant, budget 3,500 tokens.
-233 classifier calls, 479,182 prompt + 81,271 completion tokens. Gold labels are projected onto
-`{mna, dividend}` (`mgmt_change`-only filings count as `none`).
-Source: `results/e1/20261110-214827_dev35_flash/`.
+`deepseek-flash`, 2 repetitions per variant, budget 3,500 tokens, `max_tokens` 1,024. Gold labels
+are projected onto `{mna, dividend}` (`mgmt_change`-only filings count as `none`).
 
-| Metric | V0 head | V1 structured | V2 keyword |
+### Iteration found by the experiment
+
+1. **Run 1** (`results/e1/20261110-214827_dev35_flash/`, thinking on, the model default):
+   26 of 233 classifier calls stopped at exactly 1,024 completion tokens with an empty or cut-off
+   reply. `deepseek-flash` thinks before answering, and the hidden reasoning counts toward
+   `max_tokens`. DeepSeek's docs also say temperature has no effect in thinking mode, so this run's
+   temperature 0 was not applied.
+2. **Fix:** turn thinking off for the classifier. Classification needs no long reasoning, and
+   with thinking off temperature applies again. Raising `max_tokens` would have hidden the
+   symptom but kept paying for the reasoning.
+3. **Run 2** (`results/e1/20261111-211954_dev35_flash_nothink/`). Only thinking changed: same
+   cases, inputs, prompt, variants and limits.
+
+| Metric (run 1 → run 2) | V0 head | V1 structured | V2 keyword |
 |---|---|---|---|
-| Accuracy, verified cases × reps | 33/34 | 34/34 | 34/34 |
+| Accuracy, verified cases × reps | 33/34 → **34/34** | 34/34 → 34/34 | 34/34 → 34/34 |
 | Input coverage, verified positives (n=8) | 0.875 | 1.0 | 1.0 |
-| Documents failing classification (all 35) | 2.9% | 0% | 1.4% |
-| Documents needing a classify retry | 10% | 4.3% | 10% |
-| Agreement between repetitions | 94.3% | 100% | 97.1% |
-| Tokens per document | 2,319 | 2,934 | 2,754 |
-| Latency per document | 3.0 s | 2.3 s | 3.1 s |
+| Documents failing classification (all 35) | 2.9% → **0%** | 0% → 0% | 1.4% → **0%** |
+| Documents needing a classify retry | 10% → **1.4%** | 4.3% → 4.3% | 10% → **2.9%** |
+| Agreement between repetitions | 94.3% → **100%** | 100% → 100% | 97.1% → 97.1% |
+| Tokens per document | 2,319 → 1,682 | 2,934 → 2,723 | 2,754 → 2,084 |
+| Latency per document | 3.0 s → 1.3 s | 2.3 s → 1.4 s | 3.1 s → 1.4 s |
+
+Run 2 totals: 216 calls, 437,111 prompt + 17,074 completion tokens (run 1: 81,271).
+The largest reply was 166 tokens, and no call hit the limit.
 
 How to read it:
 
-- No difference between variants is demonstrated: McNemar on repetition 1 has no discordant pairs.
-  The verified cases are the easy `typical` group (ceiling effect); the groups where input selection
-  should matter (`long`, `format`, `confuser`, `multi`) are blind-labelled and not verified yet.
-- V0's only verified miss (E1-023) is an output truncation, not a window problem.
+- Truncation is gone: parse failures dropped from 26 to 2. The remaining 2 quoted more than
+  the schema's 400 characters, and both passed on retry. V0's only verified miss in run 1
+  (E1-023) was a truncation and is correct in run 2.
+- New and smaller: 4 `EVIDENCE_QUOTE_NOT_FOUND` rejections, all on E1-020, all passing on
+  retry. The model dropped one comma from the source sentence. The strict verbatim check
+  caught it. `longest_match_ratio` was 0.618, because the longest contiguous overlap breaks at
+  the comma, so a low ratio alone does not prove an invented quote.
+- No difference between variants is demonstrated: McNemar on repetition 1 has no discordant
+  pairs in either run. The verified cases are the easy `typical` group (ceiling effect). The
+  groups where input selection should matter (`long`, `format`, `confuser`, `multi`) are
+  blind-labelled and not verified yet.
 - Coverage-only comparison (no LLM; `results/e1/20261110-214025_coverage_orig35/`), on draft
-  (unverified) positives n=16: V0 0.625, V1 0.9375, V2 0.875, head truncated at the same budget
-  0.6875 — the gain comes from selection, not from a larger budget. Indicative only.
+  (unverified) positives n=16: V0 0.625, V1 0.9375, V2 0.875, and head truncated at the same
+  budget 0.6875. The gain comes from selection, not from a larger budget. Indicative only.
 
 ## Open issues
 
-1. **Output truncation.** 26 of 233 calls used exactly `max_tokens=1024` completion tokens and returned
-   an empty or cut-off reply; successful calls also spend up to ~1,000 completion tokens on ~300 visible
-   characters (hidden reasoning in `deepseek-flash`). Fix options: raise `max_tokens`, or disable
-   thinking for the classifier if the API supports it; then rerun E1.
-2. **Model name.** `deepseek-chat` is deprecated by the provider (announced discontinuation
-   2026-07-24) but is still the default in `src/config.py` and in CI's golden evaluation. E1 used
-   `deepseek-flash` via an environment override.
-3. **Labels.** Blind groups of the E1 dev split still need human labels before accuracy can be
-   reported for them; the expanded dataset (dev 100) is not labelled.
+1. **Model name.** `deepseek-chat` is deprecated by the provider (announced discontinuation
+   2026-07-24) but is still the default in `src/config.py` and in CI's golden evaluation. It
+   accepts the thinking parameter (checked 2026-11-11). E1 used `deepseek-flash` via an
+   environment override.
+2. **Labels.** Blind groups of the E1 dev split still need human labels before accuracy can be
+   reported for them. The expanded dataset (dev 100) is not labelled.
+3. **Quote check strictness.** A dropped comma fails the verbatim check (E1-020). Whether
+   punctuation should be ignored when matching is a design decision, not yet made.
 4. **Not built:** LLM-as-judge, `mgmt_change` extraction, multi-label routing, extraction-stage
    evaluation (E2), end-to-end funnel (E4), throughput measurement.
 5. **Not verified:** dashboard layout by eye (rendered headlessly with Streamlit `AppTest` only);
