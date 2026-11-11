@@ -19,8 +19,9 @@ Every number below comes from a rerunnable script. Raw outputs live under `resul
 | `b0db1ee` | **Classifier thinking mode off by default** (`CLASSIFY_THINKING=disabled`), found by the first E1 run (below). |
 | `8d35d12` | E1 run 2 (thinking off) and the iteration notes. |
 | `c554157` … `ef8aad0`, then the `evals/` move | Layered structure, moves only (no behaviour change): prompts in `src/prompts/templates/` (byte-identical, same prompt fingerprint); contracts in `src/schemas/`; routing (`src/workflows/edges.py`) split from wiring (`graph.py`); `validator` renamed `extraction_validator`; evaluation in a top-level `evals/` (datasets, evaluators, `run_golden.py`, `run_e1.py`). Layering rules enforced by `tests/test_workflows/test_layering.py`. |
+| `be01628`, `53fa7e5` | E1 scorer self-checks (gold as output → 100 %, constant `none` → only where `none` is acceptable, API outage → `error`, not wrong). They found that per-label recall counted an accepted `unclear` as a miss; it is now a hand-off counted in `unclear_accepted` (runs 1–2 unchanged). Golden set marked synthetic. |
 
-Unit tests: 216 → 431 (no LLM calls). `black --check` clean. CI on Python 3.11 not yet run for this branch.
+Unit tests: 216 → 436 (no LLM calls). `black --check` clean. CI on Python 3.11 not yet run for this branch.
 
 ## E1 — classification stage
 
@@ -81,7 +82,8 @@ How to read it:
    reported for them. The expanded dataset (dev 100) is not labelled.
 3. **Quote check strictness.** A dropped comma fails the verbatim check (E1-020). Whether
    punctuation should be ignored when matching is a design decision, not yet made.
-4. **Not built:** LLM-as-judge, `mgmt_change` extraction, multi-label routing, extraction-stage
+4. **Golden gate design.** All checks are pooled, so the one expected_fail case cannot fail the gate on its own (a wrongly stored document still scores 24/26 = 92 % > 85 %). Planned: describe each golden case by its expected outcome (stored / DLQ at stage + code / human review) and gate on outcome separately from field accuracy. Not changed yet.
+5. **Not built:** LLM-as-judge, `mgmt_change` extraction, multi-label routing, extraction-stage
    evaluation (E2), end-to-end funnel (E4), throughput measurement.
-5. **Not verified:** dashboard layout by eye (rendered headlessly with Streamlit `AppTest` only);
+6. **Not verified:** dashboard layout by eye (rendered headlessly with Streamlit `AppTest` only);
    Python 3.11.
