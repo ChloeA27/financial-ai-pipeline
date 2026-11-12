@@ -13,6 +13,8 @@ The question: before calling a field REQUIRED, how often does a real filing ment
 - **Labels are mostly unverified drafts.** Each count is given for human-verified cases and for all
   cases. Only 2 verified dividend cases and 6 verified M&A cases exist in dev, so the "all" rows
   carry the signal and stay indicative.
+- **Blind labelling stays blind.** `per_case.csv` has rows for human-verified cases only, because a
+  row reveals the case's label (same rule as `results/e1`).
 - **No LLM.** Running it costs nothing and is deterministic for a given dataset (see
   `manifest.json` for the dataset SHA-256 and git commit).
 
@@ -20,9 +22,9 @@ The question: before calling a field REQUIRED, how often does a real filing ment
 
 | Folder | Cases | Notes |
 |---|---|---|
-| `20261112-202614_dev` | dev split: 20 dividend, 28 M&A (draft labels) | First run. |
+| `20261112-202738_dev` | dev split: 20 dividend, 28 M&A (draft labels) | Current. `per_case.csv` lists human-verified cases only; `summary.json` counts all. |
 
-## Spot check of `20261112-202614_dev` (by hand, 2026-11-12)
+## Spot check of `20261112-202738_dev` (by hand, 2026-11-12)
 
 - `ex_dividend_date`: the only hit (E1-009) is an exception, not a routine disclosure. The dividend
   exceeded 25% of the share price, so the ex-dividend date followed a Nasdaq rule and the filing

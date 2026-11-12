@@ -14,7 +14,8 @@ every count is reported twice: human-verified cases only, and all cases.
     python -m evals.analysis.field_presence --dataset <dir>/e1_dataset_draft.jsonl
 
 Writes ``results/field_presence/<UTC timestamp>_dev/``: ``manifest.json``,
-``summary.json`` and ``per_case.csv`` (hit flags only, no filing text).
+``summary.json`` (counts over all cases) and ``per_case.csv`` (hit flags for
+human-verified cases only; no filing text).
 """
 
 from __future__ import annotations
@@ -86,10 +87,11 @@ def scan(cases: list[Case]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
                 continue
             text = _text(case)
             hits = {f: bool(rx.search(text)) for f, rx in compiled.items()}
-            rows.append(
-                {"case_id": case.case_id, "label": label, "verified": case.verified}
-                | hits
-            )
+            # A per-case row reveals the case's label, so only human-verified
+            # cases get one (same rule as results/e1: unverified cases carry no
+            # labels, to keep blind labelling blind). Counts below include all.
+            if case.verified:
+                rows.append({"case_id": case.case_id, "label": label} | hits)
             for scope in ("verified", "all"):
                 if scope == "verified" and not case.verified:
                     continue
@@ -142,9 +144,10 @@ def main(argv: Optional[list[str]] = None) -> Path:
     }
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-    fields = sorted({k for r in rows for k in r} - {"case_id", "label", "verified"})
+    fields = [f for pats in PATTERNS.values() for f in pats]
+    fields = list(dict.fromkeys(fields))
     with open(out / "per_case.csv", "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=["case_id", "label", "verified", *fields])
+        w = csv.DictWriter(fh, fieldnames=["case_id", "label", *fields], restval="")
         w.writeheader()
         w.writerows(rows)
 
