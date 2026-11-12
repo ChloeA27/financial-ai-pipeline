@@ -77,7 +77,7 @@ jobs:
 
       - name: Golden dataset evaluation
         if: steps.llm.outputs.available == 'true'
-        run: python evals/run_golden.py --threshold 0.85 --json
+        run: python evals/run_golden.py --no-save --json
         env:
           PYTHONPATH: "."
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}

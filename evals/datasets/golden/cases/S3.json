@@ -1,0 +1,32 @@
+{
+  "case_id": "S3",
+  "input": "inputs/syn_ma_value_undisclosed.txt",
+  "synthetic": true,
+  "purpose": "Deal value not disclosed: OPTIONAL total_value_usd stays empty and the deal is still stored.",
+  "requires": [
+    "presence_levels"
+  ],
+  "expected": {
+    "outcome": "stored",
+    "doc_type": "M&A",
+    "fields": {
+      "acquirer": "Northwind Analytics, Inc.",
+      "target": "BrightPath Logistics LLC",
+      "total_value_usd": null,
+      "stake_percentage": 100.0,
+      "requires_shareholder_approval": false,
+      "payment_method": "Cash",
+      "announcement_date": "2026-10-05"
+    },
+    "field_overrides": {
+      "acquirer": {
+        "mode": "fuzzy_match",
+        "threshold": 0.85
+      },
+      "target": {
+        "mode": "fuzzy_match",
+        "threshold": 0.85
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "case_id": "H2",
+  "input": "inputs/syn_ma_unnamed_target.txt",
+  "synthetic": true,
+  "purpose": "Target not named: REQUIRED field missing goes to a human, never filled with a description.",
+  "requires": [],
+  "expected": {
+    "outcome": "human_review",
+    "doc_type": "M&A",
+    "failure": {
+      "stage": "validate",
+      "category": "missing_info",
+      "code": "TARGET.NON_EMPTY"
+    }
+  }
+}

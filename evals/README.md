@@ -7,13 +7,12 @@ by model, prompt and run, so every run records what it used.
 ```
 evals/
 ├── datasets/
-│   ├── golden/                 end-to-end extraction set (in repo, 4 short sample announcements)
+│   ├── golden/                 end-to-end gate (in repo, synthetic, one case per pipeline path)
 │   │   ├── inputs/             source .txt files
-│   │   ├── expected_pass/      <name>.golden.json: fields the pipeline must extract
-│   │   └── expected_fail/      <name>.golden.json: documents the pipeline must reject
+│   │   └── cases/              <id>.json: expected outcome, failure stage/category, fields
 │   └── e1/README.md            classification set: lives outside this repo (see there)
 ├── evaluators/
-│   ├── golden.py               field-type-aware comparison, expected_fail scoring
+│   ├── golden.py               outcome gate + field gate (REQUIRED fields), pending, inconclusive
 │   └── e1.py                   gold projection, input coverage, McNemar, repetition agreement
 ├── run_golden.py               runner: CI quality gate
 └── run_e1.py                   runner: classification-stage experiments
@@ -26,11 +25,24 @@ Runners execute the pipeline and write the output. Production code in `src/` nev
 ## Golden set — the CI gate
 
 ```bash
-python evals/run_golden.py --threshold 0.85 [--json]
+python evals/run_golden.py [--json] [--no-save]
 ```
 
-This runs the full pipeline on every input. Each case gets its own temporary database, raw
-store and vector store. Exit code 1 means accuracy is below the threshold. CI runs it on
+This runs the full pipeline on every case. Each case gets its own temporary database, raw
+store and vector store. Each case states the outcome the pipeline must reach (`stored`,
+`out_of_scope`, `human_review` or `dlq`) and, for a failure, its stage and category. There
+are two gates, and they are never pooled:
+
+- **Outcome gate:** every gating case must reach its expected outcome. One miss fails the
+  gate, and a document stored when it should not be is reported as a false accept.
+- **Field gate:** on correctly stored cases, every REQUIRED field (from the document type's
+  `ValidationProfile`) must match. Other fields are reported as accuracy and warnings only.
+
+A case that `requires` a feature that is not implemented yet runs and is reported as
+*pending*, but it cannot fail the gate. An infrastructure failure (API down) is
+*inconclusive*: the gate fails and the case is left out of every number. Exit code 1 means
+the gate failed. Results are saved under `results/golden/<timestamp>/` unless `--no-save`
+is given. CI runs it on
 every push to `main` and on every pull request into it (`.github/workflows/ci.yml`). Run it
 after changing a prompt, a schema or the model.
 

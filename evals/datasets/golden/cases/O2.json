@@ -1,0 +1,14 @@
+{
+  "case_id": "O2",
+  "input": "inputs/syn_mgmt_change_only.txt",
+  "synthetic": true,
+  "purpose": "An officer change only (no M&A, no dividend) is out of scope.",
+  "requires": [],
+  "expected": {
+    "outcome": "out_of_scope",
+    "failure": {
+      "stage": "classify",
+      "category": "out_of_scope"
+    }
+  }
+}

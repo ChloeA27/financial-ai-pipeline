@@ -1,19 +1,20 @@
 """
-Golden-set runner (end-to-end extraction): run the pipeline on every golden
-input and score it with ``evals/evaluators/golden.py``.
+Golden-set runner: run the pipeline end to end on every golden case and gate
+on the result (scoring: ``evals/evaluators/golden.py``).
 
-Dataset: ``evals/datasets/golden/`` (``inputs/`` + ``expected_pass/`` +
-``expected_fail/``). Every case runs in a temporary database, raw store and
-vector store, so evaluation never touches development data.
+Dataset: ``evals/datasets/golden/`` (``cases/*.json`` + ``inputs/``). Every case
+runs in a temporary database, raw store and vector store, so evaluation never
+touches development data.
 
 Usage:
-    python evals/run_golden.py                       # eval all golden cases
-    python evals/run_golden.py --threshold 0.9       # 90% pass threshold
-    python evals/run_golden.py --json                # machine-readable JSON output
+    python evals/run_golden.py              # run, print, save results/golden/<ts>/
+    python evals/run_golden.py --json       # also print the summary as JSON
+    python evals/run_golden.py --no-save    # CI: print only
 
 Exit code:
-    0 — accuracy >= threshold (PASS)
-    1 — accuracy <  threshold (FAIL) or error
+    0 — gate passed: every gating case reached its expected outcome and its
+        REQUIRED fields, and no run was inconclusive
+    1 — gate failed, a run was inconclusive, or no cases were found
 """
 
 from __future__ import annotations
@@ -21,219 +22,209 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from evals.evaluators.golden import (  # noqa: E402
-    eval_expected_fail,
-    eval_expected_pass,
-    load_all_golden,
+    IMPLEMENTED_FEATURES,
+    GoldenCase,
+    load_cases,
+    score_case,
+    summarize,
 )
 from src.config import settings  # noqa: E402
 from src.rag.chroma_client import override_chroma_path  # noqa: E402
 from src.workflows.graph import run_pipeline  # noqa: E402
 
 GOLDEN_DIR = REPO_ROOT / "evals" / "datasets" / "golden"
-RAW_DATA_DIR = GOLDEN_DIR / "inputs"
+RESULTS_DIR = REPO_ROOT / "results" / "golden"
 
 
 # ── Pipeline execution ───────────────────────────────────────────────
 
 
-def _run_pipeline_for(source_file: str, raw_data_dir: Path = RAW_DATA_DIR) -> dict:
+def _run_pipeline_for(relative_input: str, base_dir: Path = GOLDEN_DIR) -> dict:
     """
-    Run the pipeline on one source file inside a temp directory so eval
+    Run the pipeline on one input inside a temp directory so evaluation
     does NOT pollute the development database or vector store.
     """
-    src_path = Path(raw_data_dir) / source_file
+    src_path = Path(base_dir) / relative_input
     if not src_path.exists():
         raise FileNotFoundError(f"Source file not found: {src_path}")
 
     with tempfile.TemporaryDirectory(prefix="pipeline_eval_") as tmpdir:
-        # Override DB paths so eval runs in complete isolation
-        original_db = settings.sqlite_db_path
-        original_chroma = settings.chromadb_path
-        original_raw = settings.raw_store_path
+        original = (
+            settings.sqlite_db_path,
+            settings.chromadb_path,
+            settings.raw_store_path,
+        )
         settings.sqlite_db_path = str(Path(tmpdir) / "eval.db")
         settings.chromadb_path = str(Path(tmpdir) / "chromadb")
         settings.raw_store_path = str(Path(tmpdir) / "raw")
-
-        # Reset ChromaDB singleton so the next get_chroma_client() call
-        # picks up the temp path. Same pattern used in test_rag.py fixtures.
         override_chroma_path(settings.chromadb_path)
-
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             state = loop.run_until_complete(run_pipeline(str(src_path)))
         finally:
             loop.close()
-            # Restore original settings
-            settings.sqlite_db_path = original_db
-            settings.chromadb_path = original_chroma
-            settings.raw_store_path = original_raw
-            # Reset ChromaDB singleton back to the production path
+            (
+                settings.sqlite_db_path,
+                settings.chromadb_path,
+                settings.raw_store_path,
+            ) = original
             override_chroma_path(None)
-
     return state
+
+
+def _tokens(state: dict) -> dict[str, int]:
+    steps = state.get("step_runs") or []
+    return {
+        "llm_calls": sum(1 for s in steps if s.get("prompt_tokens") is not None),
+        "prompt_tokens": sum(s.get("prompt_tokens") or 0 for s in steps),
+        "completion_tokens": sum(s.get("completion_tokens") or 0 for s in steps),
+    }
+
+
+def run_case(case: GoldenCase, base_dir: Path = GOLDEN_DIR) -> dict:
+    """Run and score one case; a crash is reported as a failed case."""
+    try:
+        state = _run_pipeline_for(case.input, base_dir)
+    except Exception as exc:  # the gate must report, not crash
+        state = {
+            "error": f"runner: {exc}",
+            "failure": {
+                "stage": "runner",
+                "code": "RUNNER_ERROR",
+                "category": "unknown",
+            },
+        }
+    result = score_case(case, state)
+    result["tokens"] = _tokens(state)
+    return result
+
+
+# ── Reporting ────────────────────────────────────────────────────────
+
+
+def _print_case(r: dict) -> None:
+    tag = r["status"].upper() if r["gating"] else f"PENDING:{r['status']}"
+    print(
+        f"  [{tag}] {r['case_id']}: expected {r['expected_outcome']}, "
+        f"got {r['actual_outcome']}"
+        + (f"  (failure {r['failure']})" if r["failure"] else "")
+    )
+    for c in r["checks"]:
+        if not c["passed"]:
+            print(
+                f"      XX {c['check']}: expected {c['expected']!r}, got {c['actual']!r}"
+            )
+    for f in r["fields"]:
+        if not f["passed"]:
+            level = "REQUIRED" if f["required"] else "warning"
+            print(f"      XX {f['field']} ({level}): {f['detail']}")
+    if not r["gating"]:
+        print(f"      pending on: {', '.join(r['pending_features'])}")
+
+
+def _print_summary(s: dict) -> None:
+    print(f"\n{'=' * 60}")
+    print(
+        f"Outcome gate: {s['outcome_correct']}/{s['outcome_scored']} gating cases "
+        f"reached the expected outcome"
+    )
+    if s["false_accepts"]:
+        print(f"  FALSE ACCEPTS (stored but should not be): {s['false_accepts']}")
+    for f, c in sorted(s["field_accuracy"].items()):
+        print(f"  field {f:32s} {c['passed']}/{c['total']}")
+    if s["pending"]:
+        print(f"Pending (reported, not gating): {s['pending']}")
+    if s["pending_now_passing"]:
+        print(
+            f"  Pending cases now passing; consider gating: {s['pending_now_passing']}"
+        )
+    if s["inconclusive"]:
+        print(f"INCONCLUSIVE (infrastructure): {s['inconclusive']}")
+    verdict = "PASS" if s["gate_passed"] else "FAIL"
+    print(f"GATE: {verdict}" + (f"  failed: {s['failed']}" if s["failed"] else ""))
+
+
+def _git(*args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True
+    ).stdout.strip()
+
+
+def _save(results: list[dict], summary: dict) -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    out = RESULTS_DIR / stamp
+    out.mkdir(parents=True)
+    manifest = {
+        "created_at_utc": stamp,
+        "model": settings.deepseek_model,
+        "implemented_features": sorted(IMPLEMENTED_FEATURES),
+        "git": {
+            "commit": _git("rev-parse", "HEAD"),
+            "dirty": bool(_git("status", "--porcelain")),
+        },
+        "tokens": {
+            k: sum(r["tokens"][k] for r in results)
+            for k in ("llm_calls", "prompt_tokens", "completion_tokens")
+        },
+    }
+    (out / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    (out / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    (out / "per_case.json").write_text(
+        json.dumps(results, indent=2, ensure_ascii=False, default=str) + "\n"
+    )
+    return out
 
 
 # ── Main entry point ─────────────────────────────────────────────────
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Golden Dataset Evaluation — compare pipeline output against hand-labelled golden files."
+    p = argparse.ArgumentParser(description="Golden set: outcome gate + field gate.")
+    p.add_argument("--json", action="store_true", help="Print the summary as JSON.")
+    p.add_argument(
+        "--no-save", action="store_true", help="Do not write results/golden/."
     )
-    parser.add_argument(
-        "--threshold",
-        "-t",
-        type=float,
-        default=0.85,
-        help="Minimum accuracy threshold (0.0–1.0). Exit 1 if below. Default: 0.85",
+    p.add_argument(
+        "--golden-dir",
+        type=Path,
+        default=GOLDEN_DIR,
+        help=f"Golden dataset directory. Default: {GOLDEN_DIR}",
     )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output results as JSON (machine-readable).",
-    )
-    parser.add_argument(
-        "--raw-data-dir",
-        type=str,
-        default=str(RAW_DATA_DIR),
-        help=f"Directory containing source .txt files. Default: {RAW_DATA_DIR}",
-    )
-    return parser.parse_args()
+    return p.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
-
-    goldens = load_all_golden(GOLDEN_DIR)
-    if not goldens:
-        print(f"No golden files found in {GOLDEN_DIR}.")
+    cases = load_cases(args.golden_dir)
+    if not cases:
+        print(f"No golden cases found in {args.golden_dir / 'cases'}.")
         return 1
 
-    total_passed = 0
-    total_checks = 0
-    results: list[dict] = []
-    raw_data_dir = Path(args.raw_data_dir)
+    results = []
+    for case in cases:
+        r = run_case(case, args.golden_dir)
+        _print_case(r)
+        results.append(r)
 
-    for source_file, golden in sorted(goldens.items()):
-        src_path = raw_data_dir / source_file
-        if not src_path.exists():
-            results.append(
-                {
-                    "source_file": source_file,
-                    "skipped": True,
-                    "reason": f"source file not found: {src_path}",
-                }
-            )
-            print(f"  SKIP {source_file}: source file not found")
-            continue
-
-        # Run pipeline
-        try:
-            state = _run_pipeline_for(source_file, raw_data_dir)
-        except Exception as e:
-            results.append(
-                {
-                    "source_file": source_file,
-                    "error": str(e),
-                }
-            )
-            print(f"  FAIL {source_file}: pipeline error — {e}")
-            continue
-
-        # Determine if expected pass or fail
-        expected_pass = golden.get("validation_passed") is True
-
-        if expected_pass:
-            passed, total, details = eval_expected_pass(golden, state)
-            pass_rate = passed / total if total > 0 else 1.0
-            total_passed += passed
-            total_checks += total
-
-            verdict = "PASS" if pass_rate >= args.threshold else "FAIL"
-            print(
-                f"  [{verdict}] {source_file}: "
-                f"{passed}/{total} fields passed ({pass_rate:.0%})"
-            )
-            for d in details:
-                flag = "OK" if d["passed"] else "XX"
-                print(f"      [{flag}] {d['field']}: {d['detail']}")
-                if not d["passed"]:
-                    print(f"             actual  : {d['actual']}")
-                    print(f"             expected: {d['expected']}")
-
-            results.append(
-                {
-                    "source_file": source_file,
-                    "type": "expected_pass",
-                    "passed": passed,
-                    "total": total,
-                    "pass_rate": pass_rate,
-                    "details": details,
-                }
-            )
-        else:
-            passed, total, details = eval_expected_fail(golden, state)
-            total_passed += passed
-            total_checks += total
-
-            verdict = "PASS" if passed == total else "FAIL"
-            print(
-                f"  [{verdict}] {source_file} (expected_fail): {passed}/{total} checks passed"
-            )
-            for d in details:
-                flag = "OK" if d["passed"] else "XX"
-                print(f"      [{flag}] {d['check']}: {d['detail']}")
-
-            results.append(
-                {
-                    "source_file": source_file,
-                    "type": "expected_fail",
-                    "passed": passed,
-                    "total": total,
-                    "pass_rate": passed / total if total > 0 else 0.0,
-                    "details": details,
-                }
-            )
-
-    # ── Summary ──
-    overall_rate = total_passed / total_checks if total_checks > 0 else 0.0
-    passed_threshold = overall_rate >= args.threshold
-
-    summary = {
-        "total_passed": total_passed,
-        "total_checks": total_checks,
-        "overall_accuracy": round(overall_rate, 4),
-        "threshold": args.threshold,
-        "passed": passed_threshold,
-        "results": results,
-    }
-
-    print(f"\n{'=' * 56}")
-    if passed_threshold:
-        print(
-            f"PASS: {total_passed}/{total_checks} "
-            f"({overall_rate:.1%}) — threshold >= {args.threshold:.0%}"
-        )
-    else:
-        print(
-            f"FAIL: {total_passed}/{total_checks} "
-            f"({overall_rate:.1%}) — threshold < {args.threshold:.0%}"
-        )
-
+    summary = summarize(results)
+    _print_summary(summary)
+    if not args.no_save:
+        print(f"saved: {_save(results, summary).relative_to(REPO_ROOT)}")
     if args.json:
         print("\n--- Machine-readable JSON ---")
         print(json.dumps(summary, indent=2))
-
-    return 0 if passed_threshold else 1
+    return 0 if summary["gate_passed"] else 1
 
 
 if __name__ == "__main__":

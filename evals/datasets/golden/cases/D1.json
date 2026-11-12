@@ -1,0 +1,15 @@
+{
+  "case_id": "D1",
+  "input": "inputs/syn_binary_as_txt.txt",
+  "synthetic": true,
+  "purpose": "Binary content in a .txt file goes to the DLQ at read, with no LLM call.",
+  "requires": [],
+  "expected": {
+    "outcome": "dlq",
+    "failure": {
+      "stage": "read",
+      "category": "input_error",
+      "code": "DECODE_FAILED"
+    }
+  }
+}

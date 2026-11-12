@@ -56,7 +56,7 @@ Traditional approaches (regex scraping, template-based parsers) fail because:
 | **G7 — Async Concurrency** | Batch-processing N documents must not degrade to serial execution; each file runs its own independent LangGraph state machine. | `asyncio.Semaphore` + `asyncio.gather`; wall-clock time < N × single-file time |
 | **G8 — Operation Visibility** | Streamlit dashboard exposes KPI cards, error panels, and audit-trail drill-downs querying the live database. | Dashboard visible at `http://localhost:8501` |
 | **G9 — RAG-Augmented Extraction** | Historical validated extractions are embedded and stored in ChromaDB (per doc-type collection). On first-pass extraction, semantically similar past results are retrieved as few-shot context to improve LLM accuracy. | ChromaDB collection row count; retrieval relevance |
-| **G10 — CI Golden Dataset Gate** | Every push/PR must pass a golden dataset evaluation (field-type-aware comparison against hand-labelled expected outputs) with a configurable accuracy threshold. Pipeline regressions fail the build before deployment. | GitHub Actions CI; `evals/run_golden.py --threshold 0.85` exit code check |
+| **G10 — CI Golden Dataset Gate** | Every push/PR must pass a golden dataset evaluation: each case must reach its expected outcome (stored / out of scope / human review / DLQ), and stored cases must match on every REQUIRED field. Pipeline regressions fail the build before deployment. | GitHub Actions CI; `evals/run_golden.py` exit code check |
 
 ### 1.3 Non-Goals
 
@@ -833,14 +833,12 @@ Without a regression safety net, a change to the Extractor prompt, Validator rul
 
 ```
 evals/datasets/golden/
-├── inputs/                      ← source .txt files, one per golden file
-├── expected_pass/               ← Pipeline must produce ≥85% accuracy
-│   ├── dividend_apple_2026.golden.json
-│   ├── ma_microsoft_activision.golden.json
-│   └── test_ma_pass.golden.json
-│
-└── expected_fail/               ← Pipeline must reject the document
-    └── test_ma_fail_loop.golden.json
+├── inputs/                      ← source .txt files (synthetic)
+└── cases/                       ← one JSON per case, one case per pipeline path
+    ├── S1 S2 S3 S4              ← stored (S3/S4: OPTIONAL field left empty)
+    ├── O1 O2                    ← out_of_scope (speculation, officer change)
+    ├── H1 H2 H3                 ← human_review (ambiguous, missing_info, business_rule)
+    └── D1                       ← dlq (binary input, read / input_error)
 ```
 
 ### 11.3 Eval Engine — `evals/evaluators/golden.py`, run by `evals/run_golden.py`
@@ -855,7 +853,7 @@ The evaluator runs each golden file through the pipeline with its SQLite and Chr
 | `date` | YYYY-MM-DD string equality | `announcement_date`, `ex_dividend_date` |
 | `text_lower` | Case-insensitive trimmed string match | `acquirer`, `target`, `ticker` |
 
-**Per-field overrides** — stored as `_field_eval_overrides` in each golden JSON file — adjust the comparison for one field without touching the engine:
+**Per-field overrides** — stored as `expected.field_overrides` in each case file — adjust the comparison for one field without touching the engine:
 
 | Override | Effect |
 |----------|--------|
@@ -863,11 +861,11 @@ The evaluator runs each golden file through the pipeline with its SQLite and Chr
 | `mode: "date_range"` + `range_start` / `range_end` | Any date inside the (inclusive) range passes |
 | `mode: "fuzzy_match"` + `threshold` (default 0.85) | `difflib.SequenceMatcher` ratio ≥ threshold, for names with minor variations |
 
-Example from `evals/datasets/golden/expected_pass/test_ma_pass.golden.json`:
+Example from `evals/datasets/golden/cases/S1.json`:
 
 ```json
 {
-  "_field_eval_overrides": {
+  "field_overrides": {
     "expected_close_date": {
       "mode": "date_range",
       "accept_null": true,
@@ -878,18 +876,16 @@ Example from `evals/datasets/golden/expected_pass/test_ma_pass.golden.json`:
 }
 ```
 
-The reported accuracy is `passed checks / total checks` pooled over all golden files (each field of an expected-pass file is one check; each expected-fail file is one check).
+### 11.4 Outcome Gate and Field Gate (since 2026-11-12)
 
-### 11.4 Expected-Fail Mode
+Until 2026-11-12 the gate pooled every check into one accuracy number, so the single expected-fail case could not fail the build on its own: a wrongly stored document still scored 24/26 = 92 % > 85 %. Now each case states the outcome it must reach, using `outcome_of` from `src/schemas/outcome.py`, the same rule storage uses. There are two gates, never pooled:
 
-Documents in `evals/datasets/golden/expected_fail/` are known to contain corrupt/insufficient data. The evaluator only checks that the pipeline **legitimately rejected** the document:
-1. `validation_passed == False` (retries exhausted), or
-2. the Classifier succeeded but labelled the document `none` / `unclear` (or any type with no registered extractor), or
-3. a classification or extraction loop ran out of retries on output that never passed validation.
+1. **Outcome gate:** every gating case reaches its expected outcome, and the failure stage, category and (where given) code match. One miss fails the build. A document stored when it should not be is listed as a **false accept**.
+2. **Field gate:** only on cases correctly stored. Every REQUIRED field (from the document type's `ValidationProfile`) must match. Other fields are reported as per-field accuracy and warnings.
 
-A failure whose `category` is `transient` (LLM unreachable, bad API key) or `input_error` (unreadable file, empty text) scores **0** — it proves nothing about extraction quality.
+A case whose `requires` names a feature not in `IMPLEMENTED_FEATURES` runs and is reported as **pending** but cannot fail the build (like `pytest.xfail`). A pending case that passes is flagged for promotion. A `transient` failure makes the case **inconclusive**: the build fails, and the case is excluded from every number.
 
-Field-level comparison is skipped entirely.
+Paths that need a broken model or a broken API (output that never parses, a quote that never matches, an outage) are not golden cases. Unit tests cover them with a scripted fake LLM.
 
 ### 11.5 CI Workflow — `.github/workflows/ci.yml`
 
@@ -904,7 +900,7 @@ jobs:
       - name: Check LLM secret availability   # see below
       - name: Golden dataset evaluation
         if: steps.llm.outputs.available == 'true'
-        run: python evals/run_golden.py --threshold 0.85 --json
+        run: python evals/run_golden.py --no-save --json
       - name: Lint check (black)
         run: black --check --diff src/ tests/ evals/
 ```
@@ -964,12 +960,11 @@ financial-ai-pipeline/
 ├── evals/                        ← probabilistic evaluation (tests/ stays deterministic)
 │   ├── datasets/
 │   │   ├── golden/
-│   │   │   ├── inputs/           ← 4 sample announcements (.txt)
-│   │   │   ├── expected_pass/    ← <name>.golden.json: fields to extract
-│   │   │   └── expected_fail/    ← <name>.golden.json: documents to reject
+│   │   │   ├── inputs/           ← synthetic announcements (.txt)
+│   │   │   └── cases/            ← <id>.json: expected outcome, failure, fields
 │   │   └── e1/README.md          ← E1 set is kept outside the repo (blind labels, size)
 │   ├── evaluators/
-│   │   ├── golden.py             ← field-type-aware comparison, expected_fail scoring
+│   │   ├── golden.py             ← outcome gate + field gate, pending, inconclusive
 │   │   └── e1.py                 ← gold projection, coverage, McNemar, repetition agreement
 │   ├── run_golden.py             ← CI quality gate (end-to-end extraction)
 │   └── run_e1.py                 ← classification-stage experiments

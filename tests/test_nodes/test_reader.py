@@ -119,6 +119,10 @@ class TestReadDirectory:
 
         states = await read_directory(sample_dir)
         for s in states:
+            if s.get("failure"):
+                # Golden case D1 is binary on purpose: it must fail at read, loudly.
+                assert s["failure"]["code"] == "DECODE_FAILED", s["file_path"]
+                continue
             assert len(s["raw_content"]) > 0, f"Empty content in {s['file_path']}"
 
     async def test_nonexistent_directory_raises(self) -> None:

@@ -1,0 +1,15 @@
+{
+  "case_id": "H3",
+  "input": "inputs/syn_dividend_bad_timeline.txt",
+  "synthetic": true,
+  "purpose": "Record and ex-dividend dates before the declaration: business rule violated, a human decides.",
+  "requires": [],
+  "expected": {
+    "outcome": "human_review",
+    "doc_type": "Dividend",
+    "failure": {
+      "stage": "validate",
+      "category": "business_rule"
+    }
+  }
+}

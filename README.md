@@ -201,7 +201,7 @@ pytest -m "not integration" --tb=short -q
 ### Run the golden dataset evaluation
 
 ```bash
-python evals/run_golden.py --threshold 0.85
+python evals/run_golden.py
 ```
 
 ### Run the classification-stage evaluation (E1)
@@ -238,7 +238,7 @@ financial-ai-pipeline/
 ├── README.md                     ← You are here
 │
 ├── evals/                         ← probabilistic evaluation (see evals/README.md)
-│   ├── datasets/golden/           ← inputs/ + expected_pass/ + expected_fail/
+│   ├── datasets/golden/           ← inputs/ + cases/ (one synthetic case per pipeline path)
 │   ├── datasets/e1/README.md      ← E1 classification set lives outside the repo
 │   ├── evaluators/                ← golden.py (field comparison), e1.py (classification scoring)
 │   ├── run_golden.py              ← CI quality gate: end-to-end extraction

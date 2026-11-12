@@ -1,25 +1,39 @@
 """
-Golden-set evaluator: score one pipeline run against a hand-labelled golden file.
+Golden-set evaluator: one end-to-end case per pipeline path, scored by outcome.
 
-Pure scoring (no LLM, no I/O besides loading golden files). The runner
+Pure scoring (no LLM, no I/O besides loading case files). The runner
 ``evals/run_golden.py`` executes the pipeline and calls these functions.
 
-Two kinds of case (``evals/datasets/golden/``):
-  * ``expected_pass`` — every labelled field must match, compared by field type
-    (``enum``, ``numeric`` ±1 %, ``bool``, ``date``, ``text_lower``), with
-    per-field overrides ``date_range``, ``fuzzy_match`` and ``accept_null``
-  * ``expected_fail`` — the pipeline must *judge and reject* the document; an
-    infrastructure error (LLM unreachable, missing file) earns no credit
+Each case (``evals/datasets/golden/cases/<id>.json``) states the outcome the
+pipeline must reach: ``stored``, ``out_of_scope``, ``human_review`` or ``dlq``
+(see ``src/schemas/outcome.py``). It also gives the failure stage / category
+for a case that is not stored, and the labelled fields for one that is.
+
+Two gates, never pooled:
+  * outcome gate: every gating case reaches its expected outcome (and failure
+    stage / category / code where given). One miss fails the gate.
+  * field gate: on cases correctly stored, every REQUIRED field (from the
+    document type's ValidationProfile) matches. Other fields are reported as
+    accuracy and warnings only.
+
+A case whose ``requires`` names a feature not in ``IMPLEMENTED_FEATURES`` is
+run and reported as ``pending`` but cannot fail the gate (like pytest xfail).
+A run stopped by an infrastructure failure is ``inconclusive``: it fails the
+gate and is excluded from every accuracy number.
 """
 
 from __future__ import annotations
 
 import json
+from collections import Counter
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from src.nodes.extractor import EXTRACTOR_MODELS
+from src.schemas.failure import CAT_TRANSIENT
+from src.schemas.outcome import OUTCOME_STORED, OUTCOMES, outcome_of
 
 # ── Field-type taxonomy ──────────────────────────────────────────────
 # Maps field name -> comparison mode for M&A and Dividend schemas.
@@ -51,9 +65,6 @@ FIELD_TYPE_MAP: dict[str, str] = {
 }
 
 NUMERIC_RELATIVE_TOLERANCE = 0.01  # 1%
-
-# Failure categories that say nothing about extraction quality.
-_INFRASTRUCTURE_CATEGORIES = {"transient", "input_error"}
 
 # Pipeline-controlled fields to strip from extracted_data
 _PIPELINE_FIELDS = {"doc_id", "metadata", "raw_text_snippet"}
@@ -153,126 +164,190 @@ def compare_field(
     return False, f"expected '{expected}', got '{actual}'"
 
 
-# ── Golden loading ───────────────────────────────────────────────────
+# ── Cases ────────────────────────────────────────────────────────────
+
+# Features a case may depend on via ``requires``. Add a name here when the
+# pipeline implements it; its cases then gate automatically.
+#   presence_levels — OPTIONAL fields may be empty (the validator reads the profile)
+#   retry_policy    — whether to retry depends on the failure category
+IMPLEMENTED_FEATURES: frozenset[str] = frozenset()
+
+# Infrastructure failures say nothing about the pipeline's judgement.
+INCONCLUSIVE_CATEGORIES = frozenset({CAT_TRANSIENT, "config_error"})
 
 
-def load_all_golden(golden_dir: Path) -> dict[str, dict]:
-    """Scan ``golden_dir`` and return {source_file: golden_data}."""
-    goldens: dict[str, dict] = {}
-    for subdir in ("expected_pass", "expected_fail"):
-        path = Path(golden_dir) / subdir
-        if not path.exists():
-            continue
-        for fpath in sorted(path.glob("*.golden.json")):
-            with open(fpath) as f:
-                data = json.load(f)
-            src = data.get("source_file", fpath.stem.replace(".golden", ""))
-            goldens[src] = data
-    return goldens
+@dataclass
+class GoldenCase:
+    case_id: str
+    input: str
+    purpose: str
+    expected: dict[str, Any]
+    synthetic: bool = True
+    requires: list[str] = field(default_factory=list)
+
+    @property
+    def missing_features(self) -> list[str]:
+        return [f for f in self.requires if f not in IMPLEMENTED_FEATURES]
+
+
+def load_cases(golden_dir: Path) -> list[GoldenCase]:
+    """Read every ``cases/*.json`` under ``golden_dir``; validate the outcome."""
+    cases = []
+    for path in sorted((Path(golden_dir) / "cases").glob("*.json")):
+        data = json.loads(path.read_text(encoding="utf-8"))
+        outcome = data["expected"]["outcome"]
+        if outcome not in OUTCOMES:
+            raise ValueError(f"{path.name}: unknown outcome {outcome!r}")
+        cases.append(
+            GoldenCase(
+                case_id=data["case_id"],
+                input=data["input"],
+                purpose=data.get("purpose", ""),
+                expected=data["expected"],
+                synthetic=bool(data.get("synthetic", True)),
+                requires=list(data.get("requires") or []),
+            )
+        )
+    return cases
 
 
 def extract_actual_fields(state: dict) -> dict:
-    """Extract business fields from PipelineState, stripping pipeline metadata."""
+    """Business fields from the final state, without pipeline metadata."""
     extracted = state.get("extracted_data") or {}
     return {k: v for k, v in extracted.items() if k not in _PIPELINE_FIELDS}
+
+
+def required_fields(doc_type: Optional[str]) -> frozenset[str]:
+    """REQUIRED fields of a document type, from its ValidationProfile."""
+    model = EXTRACTOR_MODELS.get(doc_type or "")
+    profile = getattr(model, "ValidationProfile", None)
+    return getattr(profile, "REQUIRED_FIELDS", frozenset())
 
 
 # ── Scoring ──────────────────────────────────────────────────────────
 
 
-def eval_expected_pass(
-    golden: dict,
-    state: dict,
-) -> tuple[int, int, list[dict]]:
+def _check(name: str, expected: Any, actual: Any) -> dict:
+    return {
+        "check": name,
+        "expected": expected,
+        "actual": actual,
+        "passed": expected == actual,
+    }
+
+
+def score_case(case: GoldenCase, state: dict) -> dict:
     """
-    Evaluate one expected_pass case.
-    Returns (passed_count, total_count, details).
+    Score one run.
+
+    ``status`` is ``pass`` | ``fail`` | ``inconclusive``; ``gating`` says
+    whether the case counts toward the gate (False while features are pending).
     """
-    golden_fields: dict = golden.get("fields", {})
-    overrides: dict = golden.get("_field_eval_overrides", {})
-    actual_fields: dict = extract_actual_fields(state)
-
-    passed = 0
-    total = len(golden_fields)
-    details: list[dict] = []
-
-    for field_name, expected_val in golden_fields.items():
-        actual_val = actual_fields.get(field_name)
-        field_overrides = overrides.get(field_name)
-        ok, detail = compare_field(
-            field_name, actual_val, expected_val, field_overrides
-        )
-        if ok:
-            passed += 1
-        details.append(
-            {
-                "field": field_name,
-                "passed": ok,
-                "detail": detail,
-                "actual": actual_val,
-                "expected": expected_val,
-            }
-        )
-
-    return passed, total, details
-
-
-def is_legitimate_rejection(state: dict) -> bool:
-    """
-    True when the pipeline *judged* the document and refused it, as opposed
-    to merely crashing.
-
-    Legitimate rejections:
-      - the Extraction Validator (or the Extractor's schema-parse loop) marked
-        the document ``validation_passed=False`` after exhausting retries;
-      - the Classifier succeeded and labelled the document ``none`` / ``unclear``
-        (or any type the pipeline has no extractor for);
-      - a classification or extraction loop ran out of retries on output that
-        never passed validation.
-
-    Anything else carrying an ``error`` (LLM unreachable, bad API key,
-    missing file, ...) is an infrastructure failure and proves nothing
-    about extraction quality, so it must NOT earn credit.
-    """
-    if state.get("validation_passed") is False:
-        return True
+    exp = case.expected
     failure = state.get("failure") or {}
-    if failure.get("category") in _INFRASTRUCTURE_CATEGORIES:
-        return False
-    if failure:
-        # Any other structured failure means the pipeline judged the document
-        # (out of scope, ambiguous, or the classifier/extractor output never
-        # passed validation) rather than hit an infrastructure problem.
-        return True
-    doc_type = state.get("doc_type")
-    return doc_type is not None and doc_type not in EXTRACTOR_MODELS
+    actual_outcome = outcome_of(state)
 
-
-def eval_expected_fail(golden: dict, state: dict) -> tuple[int, int, list[dict]]:
-    """
-    Evaluate one expected_fail case.
-
-    Passes only if the pipeline legitimately rejected the document (see
-    ``is_legitimate_rejection``); an infrastructure error is a FAIL.
-    """
-    error = state.get("error")
-
-    if state.get("validation_passed") is True:
-        passed, detail = False, "expected fail but validation passed"
-    elif is_legitimate_rejection(state):
-        reason = f"error: {error}" if error else "validation_passed=false"
-        if state.get("validation_passed") is not False:
-            reason = (
-                f"classified as '{state.get('doc_type')}' (no extractor) — {reason}"
+    checks = [_check("outcome", exp["outcome"], actual_outcome)]
+    if "doc_type" in exp:
+        checks.append(_check("doc_type", exp["doc_type"], state.get("doc_type")))
+    for key in ("stage", "category", "code"):
+        if key in (exp.get("failure") or {}):
+            checks.append(
+                _check(f"failure.{key}", exp["failure"][key], failure.get(key))
             )
-        passed, detail = True, reason
-    elif error:
-        passed, detail = False, f"infrastructure error, not a rejection: {error}"
-    else:
-        passed, detail = False, "validation_passed is None"
 
-    return (
-        1 if passed else 0,
-        1,
-        [{"check": "validation_passed", "passed": passed, "detail": detail}],
+    fields: list[dict] = []
+    if exp["outcome"] == OUTCOME_STORED and actual_outcome == OUTCOME_STORED:
+        required = required_fields(exp.get("doc_type"))
+        overrides = exp.get("field_overrides") or {}
+        actual_fields = extract_actual_fields(state)
+        for name, expected_val in (exp.get("fields") or {}).items():
+            actual_val = actual_fields.get(name)
+            ok, detail = compare_field(
+                name, actual_val, expected_val, overrides.get(name)
+            )
+            fields.append(
+                {
+                    "field": name,
+                    "required": name in required,
+                    "passed": ok,
+                    "detail": detail,
+                    "actual": actual_val,
+                    "expected": expected_val,
+                }
+            )
+
+    if failure.get("category") in INCONCLUSIVE_CATEGORIES:
+        status = "inconclusive"
+    elif all(c["passed"] for c in checks) and all(
+        f["passed"] for f in fields if f["required"]
+    ):
+        status = "pass"
+    else:
+        status = "fail"
+
+    return {
+        "case_id": case.case_id,
+        "input": case.input,
+        "status": status,
+        "gating": not case.missing_features,
+        "pending_features": case.missing_features,
+        "expected_outcome": exp["outcome"],
+        "actual_outcome": actual_outcome,
+        "false_accept": exp["outcome"] != OUTCOME_STORED
+        and actual_outcome == OUTCOME_STORED,
+        "failure": (
+            {k: failure.get(k) for k in ("stage", "code", "category")}
+            if failure
+            else None
+        ),
+        "checks": checks,
+        "fields": fields,
+        "field_warnings": [
+            f["field"] for f in fields if not f["passed"] and not f["required"]
+        ],
+    }
+
+
+def summarize(results: list[dict]) -> dict:
+    """Gate verdict plus the numbers behind it (the two gates are never pooled)."""
+    gating = [r for r in results if r["gating"]]
+    pending = [r for r in results if not r["gating"]]
+    failed = [r["case_id"] for r in gating if r["status"] == "fail"]
+    inconclusive = [r["case_id"] for r in results if r["status"] == "inconclusive"]
+    scored = [r for r in gating if r["status"] != "inconclusive"]
+
+    confusion = Counter(
+        (r["expected_outcome"], r["actual_outcome"])
+        for r in results
+        if r["status"] != "inconclusive"
     )
+    per_field: dict[str, dict[str, int]] = {}
+    for r in scored:
+        for f in r["fields"]:
+            c = per_field.setdefault(f["field"], {"passed": 0, "total": 0})
+            c["total"] += 1
+            c["passed"] += int(f["passed"])
+
+    return {
+        "gate_passed": not failed and not inconclusive,
+        "cases": len(results),
+        "gating_cases": len(gating),
+        "outcome_correct": sum(
+            r["expected_outcome"] == r["actual_outcome"] for r in scored
+        ),
+        "outcome_scored": len(scored),
+        "failed": failed,
+        "inconclusive": inconclusive,
+        "false_accepts": [r["case_id"] for r in results if r["false_accept"]],
+        "pending": {r["case_id"]: r["pending_features"] for r in pending},
+        "pending_now_passing": [r["case_id"] for r in pending if r["status"] == "pass"],
+        "confusion": [
+            {"expected": e, "actual": a, "count": n}
+            for (e, a), n in sorted(confusion.items())
+        ],
+        "field_accuracy": per_field,
+        "field_warnings": {
+            r["case_id"]: r["field_warnings"] for r in scored if r["field_warnings"]
+        },
+    }

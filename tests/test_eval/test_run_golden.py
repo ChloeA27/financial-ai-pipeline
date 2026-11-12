@@ -1,4 +1,4 @@
-"""--raw-data-dir must reach the pipeline run, not just the existence check."""
+"""The golden runner resolves each case input against the golden directory it is given."""
 
 from __future__ import annotations
 
@@ -40,6 +40,6 @@ def test_default_dir_is_unchanged() -> None:
     import inspect
 
     default = (
-        inspect.signature(evaluate._run_pipeline_for).parameters["raw_data_dir"].default
+        inspect.signature(evaluate._run_pipeline_for).parameters["base_dir"].default
     )
-    assert default == evaluate.RAW_DATA_DIR
+    assert default == evaluate.GOLDEN_DIR
