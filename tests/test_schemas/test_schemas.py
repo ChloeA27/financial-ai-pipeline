@@ -393,3 +393,19 @@ class TestMetadataLinksToRawLayer:
             source_path="/x", model_name="m", doc_type="M&A", source_hash="ab" * 32
         )
         assert meta.source_hash == "ab" * 32
+
+
+class TestPresenceLevels:
+    """Presence levels name real fields and never overlap."""
+
+    @pytest.mark.parametrize("doc_type", ["M&A", "Dividend"])
+    def test_levels_name_existing_fields_and_are_disjoint(self, doc_type: str) -> None:
+        from src.nodes.extractor import EXTRACTOR_MODELS
+
+        model = EXTRACTOR_MODELS[doc_type]
+        profile = model.ValidationProfile
+        fields = set(model.model_fields)
+        assert profile.REQUIRED_FIELDS <= fields
+        assert profile.EXPECTED_FIELDS <= fields
+        assert not profile.REQUIRED_FIELDS & profile.EXPECTED_FIELDS
+        assert profile.REQUIRED_FIELDS
