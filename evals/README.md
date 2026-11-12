@@ -7,14 +7,14 @@ by model, prompt and run, so every run records what it used.
 ```
 evals/
 ├── datasets/
-│   ├── golden/                 end-to-end gate (in repo, synthetic, one case per pipeline path)
+│   ├── scenarios/              end-to-end regression gate (in repo, synthetic, one case per path)
 │   │   ├── inputs/             source .txt files
 │   │   └── cases/              <id>.json: expected outcome, failure stage/category, fields
 │   └── e1/README.md            classification set: lives outside this repo (see there)
 ├── evaluators/
-│   ├── golden.py               outcome gate + field gate (REQUIRED fields), pending, inconclusive
+│   ├── scenarios.py            outcome gate + field gate (REQUIRED fields), pending, inconclusive
 │   └── e1.py                   gold projection, input coverage, McNemar, repetition agreement
-├── run_golden.py               runner: CI quality gate
+├── run_scenarios.py            runner: CI scenario gate
 └── run_e1.py                   runner: classification-stage experiments
 ```
 
@@ -22,10 +22,18 @@ Evaluators only score: they take a pipeline result plus a label and return a ver
 Runners execute the pipeline and write the output. Production code in `src/` never imports
 `evals/`, and a unit test enforces this.
 
-## Golden set — the CI gate
+## Scenario gate — CI regression check (called the golden set until 2026-11-12)
+
+Three kinds of check, three questions:
+
+| | Question | Data | LLM | Result |
+|---|---|---|---|---|
+| `tests/` | Is the code right? | hand-written fakes | no (scripted fake) | pass/fail per commit; CI log |
+| scenario gate | Does each path still work end to end with the real model? | synthetic, one case per path | yes | gate pass/fail; `results/scenarios/` |
+| E1 (later E2) | How good is the model on real filings? | real EDGAR, human-labelled | yes | numbers with model, prompt and dataset hash; `results/e1/` |
 
 ```bash
-python evals/run_golden.py [--json] [--no-save]
+python evals/run_scenarios.py [--json] [--no-save]
 ```
 
 This runs the full pipeline on every case. Each case gets its own temporary database, raw
@@ -41,7 +49,7 @@ are two gates, and they are never pooled:
 A case that `requires` a feature that is not implemented yet runs and is reported as
 *pending*, but it cannot fail the gate. An infrastructure failure (API down) is
 *inconclusive*: the gate fails and the case is left out of every number. Exit code 1 means
-the gate failed. Results are saved under `results/golden/<timestamp>/` unless `--no-save`
+the gate failed. Results are saved under `results/scenarios/<timestamp>/` unless `--no-save`
 is given. CI runs it on
 every push to `main` and on every pull request into it (`.github/workflows/ci.yml`). Run it
 after changing a prompt, a schema or the model.

@@ -77,7 +77,7 @@ How to read it:
 ## Open issues
 
 1. **Model name.** `deepseek-chat` is deprecated by the provider (announced discontinuation
-   2026-07-24) but is still the default in `src/config.py` and in CI's golden evaluation. It
+   2026-07-24) but is still the default in `src/config.py` and in CI's scenario gate. It
    accepts the thinking parameter (checked 2026-11-11). E1 used `deepseek-flash` via an
    environment override.
 2. **Labels.** Blind groups of the E1 dev split still need human labels before accuracy can be
@@ -85,7 +85,7 @@ How to read it:
 3. **Quote check strictness (decided 2026-11-11: stay strict).** A dropped comma fails the
    verbatim check (E1-020); in run 2 all 4 such rejections passed on retry. Punctuation is not
    relaxed.
-4. **Golden gate design.** All checks are pooled, so the one expected_fail case cannot fail the gate on its own (a wrongly stored document still scores 24/26 = 92 % > 85 %). Planned: describe each golden case by its expected outcome (stored / DLQ at stage + code / human review) and gate on outcome separately from field accuracy. Not changed yet.
+4. **Golden gate design, redesigned 2026-11-12 on branch `feat/outcome-routing` (not merged).** The old gate pooled all checks, so the one expected_fail case could not fail it on its own (a wrongly stored document still scored 24/26 = 92 % > 85 %). It is now the *scenario gate* (`evals/run_scenarios.py`): 10 synthetic cases, one or two per path, each with an expected outcome (stored / out_of_scope / human_review / dlq). The outcome gate and the REQUIRED-field gate are separate. Not yet run with the real model.
 5. **Not built:** LLM-as-judge, `mgmt_change` extraction, multi-label routing, extraction-stage
    evaluation (E2), end-to-end funnel (E4), throughput measurement.
 6. **Not verified:** dashboard layout by eye (rendered headlessly with Streamlit `AppTest` only);

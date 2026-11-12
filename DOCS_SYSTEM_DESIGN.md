@@ -19,7 +19,7 @@
 8. [Storage Architecture](#8-storage-architecture)
 9. [Multi-Business-Line Extension (Registry Pattern)](#9-multi-business-line-extension-registry-pattern)
 10. [RAG-Augmented Extraction (off by default)](#10-rag-augmented-extraction-off-by-default)
-11. [CI Golden Dataset Gate](#11-ci-golden-dataset-gate)
+11. [CI Scenario Gate](#11-ci-scenario-gate)
 12. [Concurrency & Performance](#12-concurrency--performance)
 13. [Appendix — Physical File Map](#13-appendix--physical-file-map)
 
@@ -56,7 +56,7 @@ Traditional approaches (regex scraping, template-based parsers) fail because:
 | **G7 — Async Concurrency** | Batch-processing N documents must not degrade to serial execution; each file runs its own independent LangGraph state machine. | `asyncio.Semaphore` + `asyncio.gather`; wall-clock time < N × single-file time |
 | **G8 — Operation Visibility** | Streamlit dashboard exposes KPI cards, error panels, and audit-trail drill-downs querying the live database. | Dashboard visible at `http://localhost:8501` |
 | **G9 — RAG-Augmented Extraction** | Historical validated extractions are embedded and stored in ChromaDB (per doc-type collection). On first-pass extraction, semantically similar past results are retrieved as few-shot context to improve LLM accuracy. | ChromaDB collection row count; retrieval relevance |
-| **G10 — CI Golden Dataset Gate** | Every push/PR must pass a golden dataset evaluation: each case must reach its expected outcome (stored / out of scope / human review / DLQ), and stored cases must match on every REQUIRED field. Pipeline regressions fail the build before deployment. | GitHub Actions CI; `evals/run_golden.py` exit code check |
+| **G10 — CI Scenario Gate** | Every push/PR must pass the scenario gate: each case must reach its expected outcome (stored / out of scope / human review / DLQ), and stored cases must match on every REQUIRED field. Pipeline regressions fail the build before deployment. | GitHub Actions CI; `evals/run_scenarios.py` exit code check |
 
 ### 1.3 Non-Goals
 
@@ -662,7 +662,7 @@ Those are the only **required** changes. Three further registries are optional, 
 |----------|------------------|
 | `_VALIDATION_RULESETS` / `_ALLOWED_VALUES` in `src/nodes/extraction_validator.py` | The Extraction Validator passes the document silently (only schema-level checks apply) |
 | `COLLECTION_MAP` in `src/rag/chroma_client.py` | No RAG for this type: retrieval returns nothing and the vector write is logged as a non-fatal error |
-| `FIELD_TYPE_MAP` in `evals/evaluators/golden.py` | New fields fall back to case-insensitive text comparison in the golden eval |
+| `FIELD_TYPE_MAP` in `evals/evaluators/scenarios.py` | New fields fall back to case-insensitive text comparison in the scenario gate |
 
 ### 9.2 Registration Points
 
@@ -823,16 +823,18 @@ Embedding is currently purely local (`all-MiniLM-L6-v2` via SentenceTransformer)
 
 ---
 
-## 11. CI Golden Dataset Gate
+## 11. CI Scenario Gate
+
+*Called the Golden Dataset Gate until 2026-11-12. Renamed: the cases are synthetic and chosen per pipeline path, so they check routing end to end; they do not measure quality. Quality on real filings is measured by E1.*
 
 ### 11.1 Motivation
 
-Without a regression safety net, a change to the Extractor prompt, Validator rules, or LLM model can silently degrade extraction quality. The Golden Dataset Gate solves this by running the full pipeline against a **hand-labelled golden dataset** on every CI push/PR.
+Without a regression safety net, a change to the Extractor prompt, Validator rules, or LLM model can silently degrade extraction quality. The scenario gate runs the full pipeline with the real model on one synthetic case per path on every CI push/PR.
 
 ### 11.2 Directory Structure
 
 ```
-evals/datasets/golden/
+evals/datasets/scenarios/
 ├── inputs/                      ← source .txt files (synthetic)
 └── cases/                       ← one JSON per case, one case per pipeline path
     ├── S1 S2 S3 S4              ← stored (S3/S4: OPTIONAL field left empty)
@@ -841,9 +843,9 @@ evals/datasets/golden/
     └── D1                       ← dlq (binary input, read / input_error)
 ```
 
-### 11.3 Eval Engine — `evals/evaluators/golden.py`, run by `evals/run_golden.py`
+### 11.3 Eval Engine — `evals/evaluators/scenarios.py`, run by `evals/run_scenarios.py`
 
-The evaluator runs each golden file through the pipeline with its SQLite and ChromaDB paths pointed at a temp directory, then compares the output against the golden JSON using a **field-type-aware comparison engine**. Each field's mode comes from `FIELD_TYPE_MAP` in `evals/evaluators/golden.py` (default: `text_lower`):
+The runner runs each case through the pipeline with its SQLite and ChromaDB paths pointed at a temp directory, then compares the output against the case file using a **field-type-aware comparison engine**. Each field's mode comes from `FIELD_TYPE_MAP` in `evals/evaluators/scenarios.py` (default: `text_lower`):
 
 | Mode | Match Rule | Example Fields |
 |------|-----------|----------------|
@@ -861,7 +863,7 @@ The evaluator runs each golden file through the pipeline with its SQLite and Chr
 | `mode: "date_range"` + `range_start` / `range_end` | Any date inside the (inclusive) range passes |
 | `mode: "fuzzy_match"` + `threshold` (default 0.85) | `difflib.SequenceMatcher` ratio ≥ threshold, for names with minor variations |
 
-Example from `evals/datasets/golden/cases/S1.json`:
+Example from `evals/datasets/scenarios/cases/S1.json`:
 
 ```json
 {
@@ -885,7 +887,7 @@ Until 2026-11-12 the gate pooled every check into one accuracy number, so the si
 
 A case whose `requires` names a feature not in `IMPLEMENTED_FEATURES` runs and is reported as **pending** but cannot fail the build (like `pytest.xfail`). A pending case that passes is flagged for promotion. A `transient` failure makes the case **inconclusive**: the build fails, and the case is excluded from every number.
 
-Paths that need a broken model or a broken API (output that never parses, a quote that never matches, an outage) are not golden cases. Unit tests cover them with a scripted fake LLM.
+Paths that need a broken model or a broken API (output that never parses, a quote that never matches, an outage) are not scenario cases. Unit tests cover them with a scripted fake LLM.
 
 ### 11.5 CI Workflow — `.github/workflows/ci.yml`
 
@@ -898,23 +900,23 @@ jobs:
       - name: Unit tests (no LLM calls)
         run: pytest -m "not integration" --tb=short -q
       - name: Check LLM secret availability   # see below
-      - name: Golden dataset evaluation
+      - name: Scenario gate (real LLM, end to end)
         if: steps.llm.outputs.available == 'true'
-        run: python evals/run_golden.py --no-save --json
+        run: python evals/run_scenarios.py --no-save --json
       - name: Lint check (black)
         run: black --check --diff src/ tests/ evals/
 ```
 
 Three gates, sequential:
 1. **Unit tests** — 400+ tests, zero LLM calls. Every test runs against a private ChromaDB directory and an offline fake embedding function (`tests/conftest.py`), so nothing touches `data/chromadb` and nothing needs the network — except tests marked `real_embedder`, which load the actual sentence-transformers model. For a fully offline run: `pytest -m "not integration and not real_embedder"`.
-2. **Golden evaluation** — full pipeline end-to-end with real LLM, exit code 0/1 gates the build
+2. **Scenario gate** — full pipeline end-to-end with real LLM, exit code 0/1 gates the build
 3. **Black lint** — format consistency, with `black==25.11.0` pinned in `requirements-dev.txt` and installed alongside the test tooling
 
-**Secrets and forks.** Repository secrets are not exposed to pull requests from forks. On a pull request without `DEEPSEEK_API_KEY` the golden evaluation is skipped with a visible warning; on a **push** (to `main`) a missing key fails the build, so the quality gate cannot be bypassed silently.
+**Secrets and forks.** Repository secrets are not exposed to pull requests from forks. On a pull request without `DEEPSEEK_API_KEY` the scenario gate is skipped with a visible warning; on a **push** (to `main`) a missing key fails the build, so the quality gate cannot be bypassed silently.
 
 ### 11.6 Isolation During Eval
 
-For each golden file the evaluator swaps `settings.sqlite_db_path`, `settings.chromadb_path` and `settings.raw_store_path` to a temporary directory and resets the ChromaDB singleton via `override_chroma_path`, restoring both afterwards. `evaluate.py` only runs the graph (`run_pipeline`) and never calls the repository, so nothing is persisted and the RAG index stays empty — the golden gate therefore measures **zero-shot** extraction quality, not RAG-augmented quality. Files are evaluated sequentially (the settings swap is process-global, so the runner is not safe to parallelise).
+For each case the runner swaps `settings.sqlite_db_path`, `settings.chromadb_path` and `settings.raw_store_path` to a temporary directory and resets the ChromaDB singleton via `override_chroma_path`, restoring both afterwards. `run_scenarios.py` only runs the graph (`run_pipeline`) and never calls the repository, so nothing is persisted and the RAG index stays empty — the scenario gate therefore exercises **zero-shot** extraction, not RAG-augmented quality. Files are evaluated sequentially (the settings swap is process-global, so the runner is not safe to parallelise).
 
 ---
 
@@ -959,14 +961,14 @@ financial-ai-pipeline/
 │
 ├── evals/                        ← probabilistic evaluation (tests/ stays deterministic)
 │   ├── datasets/
-│   │   ├── golden/
+│   │   ├── scenarios/
 │   │   │   ├── inputs/           ← synthetic announcements (.txt)
 │   │   │   └── cases/            ← <id>.json: expected outcome, failure, fields
 │   │   └── e1/README.md          ← E1 set is kept outside the repo (blind labels, size)
 │   ├── evaluators/
-│   │   ├── golden.py             ← outcome gate + field gate, pending, inconclusive
+│   │   ├── scenarios.py          ← outcome gate + field gate, pending, inconclusive
 │   │   └── e1.py                 ← gold projection, coverage, McNemar, repetition agreement
-│   ├── run_golden.py             ← CI quality gate (end-to-end extraction)
+│   ├── run_scenarios.py          ← CI scenario gate (end to end, real LLM)
 │   └── run_e1.py                 ← classification-stage experiments
 │
 ├── results/
@@ -974,7 +976,7 @@ financial-ai-pipeline/
 │   └── e1/                       ← One folder per E1 run (index: results/e1/README.md)
 │
 ├── .github/workflows/
-│   └── ci.yml                    ← CI gates: unit tests → golden eval → lint
+│   └── ci.yml                    ← CI gates: unit tests → scenario gate → lint
 ├── .streamlit/config.toml        ← Dashboards bind to localhost, no usage stats
 │
 ├── src/
@@ -1046,7 +1048,7 @@ financial-ai-pipeline/
 │   ├── fake_embedding.py         ← Offline deterministic embedding function
 │   ├── test_workflows/           ← Routers, scripted-LLM whole-graph runs, audit trail, layering rules
 │   ├── test_cli/                 ← Batch mode, concurrency, crash handling
-│   ├── test_eval/                ← Golden-eval scoring, E1 scoring and runner
+│   ├── test_eval/                ← Scenario-gate scoring, E1 scoring and runners
 │   ├── test_nodes/               ← One file per node + input windows, retries, failure records
 │   ├── test_storage/             ← SQLite repository, raw store
 │   ├── test_llm/                 ← LLM client call records

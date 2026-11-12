@@ -2,7 +2,7 @@
 
 ![Badge](https://img.shields.io/badge/Python-3.11%2B-blue) ![Badge](https://img.shields.io/badge/LangGraph-StateGraph-orange) ![Badge](https://img.shields.io/badge/LLM-DeepSeek%20(OpenAI--compatible)-green) ![Badge](https://img.shields.io/badge/Tests-200%2B%20passing-brightgreen)
 
-> **A self-correcting, multi-agent LLM pipeline that turns unstructured financial announcements (M&A, dividends) into strictly-typed, versioned, fully-traceable JSON — orchestrated as a LangGraph state machine with RAG-augmented extraction and a CI golden-dataset quality gate.**
+> **A self-correcting, multi-agent LLM pipeline that turns unstructured financial announcements (M&A, dividends) into strictly-typed, versioned, fully-traceable JSON — orchestrated as a LangGraph state machine with RAG-augmented extraction and a CI scenario gate.**
 
 ---
 
@@ -31,7 +31,7 @@ This pipeline combines an LLM extraction step with a deterministic, self-correct
 - **Two-model data isolation**: the LLM only ever fills business fields (`MandaExtraction`, `DividendExtraction`); the pipeline itself owns provenance (`doc_id`, `Metadata`, audit trail) so the model can never corrupt controlled fields
 - **SHA-256 idempotency + SCD Type 2 versioning**: re-running on unchanged content is a no-op; re-running on an edited file archives the old version and inserts a new one — nothing is ever overwritten
 - **RAG-augmented extraction**: validated past extractions are embedded (SentenceTransformer, local) and stored in ChromaDB per document type, then retrieved as few-shot context on first-pass extraction. **Off by default** (`RAG_ENABLED=false`): with RAG on, a batch run feeds earlier documents' results to later ones, so results depend on processing order — it stays off for evaluation, and its effect on accuracy has not been measured.
-- **CI golden-dataset gate**: every push runs the pipeline against hand-labelled golden files with a field-type-aware comparison engine (`enum`, `numeric` ±1 %, `bool`, `date`, `text_lower`; per-field overrides `date_range`, `fuzzy_match`, `accept_null`) and fails the build below an accuracy threshold
+- **CI scenario gate**: one synthetic case per pipeline path, run end to end with the real model; each case must reach its expected outcome (stored / out of scope / human review / DLQ) and stored cases must match on every REQUIRED field. Outcome and field accuracy are gated separately, never pooled
 
 Currently supports two document types (**M&A**, **Dividend**) via a registry pattern — adding a new type requires a new schema file and a few dict entries, no changes to graph topology or node logic.
 
@@ -112,11 +112,11 @@ Failure stages recorded in the DLQ: `read`, `classify`, `classify_validate`, `ex
 | **Self-Correction Loops** | Conditional LangGraph edges route a rejected classification back to the Classifier and a failed extraction back to the Extractor, each with the validator's structured error feedback injected into the next prompt and each with an independent retry budget |
 | **Evidence-checked Classification** | The Classifier must return a verbatim `evidence_quote`; plain code checks that it occurs in the source text (whitespace-, case- and typographic-quote-insensitive). The model's self-reported `confidence` is logged but never used for routing |
 | **Stage-tagged DLQ** | Every fatal exit carries a `failure` record (stage, code, category); the DLQ stores it in columns together with the classifier output and the full correction history |
-| **Zero-Code Extension** | Adding a document type = 1 new schema file + 3 registry dict entries in `src/nodes/extractor.py` — no changes to graph topology or node logic (optional extras: validator rules, a RAG collection in `COLLECTION_MAP`, and `FIELD_TYPE_MAP` for the golden eval) |
+| **Zero-Code Extension** | Adding a document type = 1 new schema file + 3 registry dict entries in `src/nodes/extractor.py` — no changes to graph topology or node logic (optional extras: validator rules, a RAG collection in `COLLECTION_MAP`, and `FIELD_TYPE_MAP` for the scenario gate) |
 | **RAG-Augmented Extraction** | ChromaDB collection per document type; embeddings via local `SentenceTransformer` (`all-MiniLM-L6-v2`); only validated extractions are embedded; superseded versions are de-indexed and a file is never retrieved as its own example; first-pass extraction only (retries reuse the same context). Off by default (`RAG_ENABLED=false`) |
 | **Async Concurrency** | `asyncio.Semaphore` + `asyncio.gather` — batch mode runs each file's LangGraph state machine independently and concurrently |
 | **Operation Visibility** | Streamlit dashboard (`src/dashboard.py`) reads `data/pipeline.db` live for KPI cards, a Dead Letter panel, and per-`doc_id` self-correction audit drill-downs |
-| **CI Golden Dataset Gate** | `evals/run_golden.py` runs the full pipeline against hand-labelled golden JSON files with a field-type-aware comparison engine, gating the build on a configurable accuracy threshold |
+| **CI Scenario Gate** | `evals/run_scenarios.py` runs one synthetic case per pipeline path end to end; the build fails if any case misses its expected outcome or a REQUIRED field |
 
 ---
 
@@ -144,7 +144,7 @@ Failure stages recorded in the DLQ: `read`, `classify`, `classify_validate`, `ex
 - **loguru** — structured logging
 - **pytest** / **pytest-asyncio** / **pytest-cov** — test suite
 - **black** — formatting, enforced in CI
-- **GitHub Actions** — CI pipeline (unit tests → golden eval → lint)
+- **GitHub Actions** — CI pipeline (unit tests → scenario gate → lint)
 
 ---
 
@@ -174,13 +174,13 @@ cp .env.example .env
 ### Run on a single file
 
 ```bash
-python -m src.main --file evals/datasets/golden/inputs/ma_microsoft_activision.txt
+python -m src.main --file evals/datasets/scenarios/inputs/ma_microsoft_activision.txt
 ```
 
 ### Run on a directory (concurrent batch mode)
 
 ```bash
-python -m src.main --dir evals/datasets/golden/inputs --concurrency 5
+python -m src.main --dir evals/datasets/scenarios/inputs --concurrency 5
 ```
 
 ### Launch the monitoring dashboard
@@ -198,10 +198,10 @@ streamlit run src/dashboard.py
 pytest -m "not integration" --tb=short -q
 ```
 
-### Run the golden dataset evaluation
+### Run the scenario gate (real LLM, end to end)
 
 ```bash
-python evals/run_golden.py
+python evals/run_scenarios.py
 ```
 
 ### Run the classification-stage evaluation (E1)
@@ -238,18 +238,20 @@ financial-ai-pipeline/
 ├── README.md                     ← You are here
 │
 ├── evals/                         ← probabilistic evaluation (see evals/README.md)
-│   ├── datasets/golden/           ← inputs/ + cases/ (one synthetic case per pipeline path)
+│   ├── datasets/scenarios/        ← inputs/ + cases/ (one synthetic case per pipeline path)
 │   ├── datasets/e1/README.md      ← E1 classification set lives outside the repo
-│   ├── evaluators/                ← golden.py (field comparison), e1.py (classification scoring)
-│   ├── run_golden.py              ← CI quality gate: end-to-end extraction
+│   ├── evaluators/                ← scenarios.py (outcome + field gates), e1.py (classification scoring)
+│   ├── run_scenarios.py           ← CI scenario gate: end to end, real LLM
 │   └── run_e1.py                  ← classification-stage experiments
 │
 ├── results/
 │   ├── SUMMARY.md                 ← Project state + latest measured numbers
-│   └── e1/                        ← One folder per E1 run (index: results/e1/README.md)
+│   ├── e1/                        ← One folder per E1 run (index: results/e1/README.md)
+│   ├── scenarios/                 ← One folder per local scenario-gate run
+│   └── field_presence/            ← Field mention rates in real filings (no LLM)
 │
 ├── .github/workflows/
-│   └── ci.yml                     ← CI: unit tests → golden eval → black lint
+│   └── ci.yml                     ← CI: unit tests → scenario gate → black lint
 ├── .streamlit/config.toml         ← Dashboards bind to localhost only
 │
 ├── src/
@@ -304,9 +306,9 @@ financial-ai-pipeline/
 
 | Document | Purpose |
 |----------|---------|
-| [DOCS_SYSTEM_DESIGN.md](./DOCS_SYSTEM_DESIGN.md) | Full system design white paper — graph topology, two-model isolation, idempotency defense, SCD2 versioning, self-correction loop, RAG architecture, CI golden-dataset gate, concurrency model |
+| [DOCS_SYSTEM_DESIGN.md](./DOCS_SYSTEM_DESIGN.md) | Full system design white paper — graph topology, two-model isolation, idempotency defense, SCD2 versioning, self-correction loop, RAG architecture, CI scenario gate, concurrency model |
 | [results/SUMMARY.md](./results/SUMMARY.md) | Current state of the project, latest measured evaluation numbers, open issues |
-| [evals/README.md](./evals/README.md) | Evaluation suite: datasets, evaluators, how to run the golden gate and E1 |
+| [evals/README.md](./evals/README.md) | Evaluation suite: datasets, evaluators, how to run the scenario gate and E1 |
 | [results/e1/README.md](./results/e1/README.md) | Index of E1 evaluation runs and how a run folder is laid out |
 
 ---
@@ -314,8 +316,8 @@ financial-ai-pipeline/
 ## 🧪 Testing & CI
 
 - **400+ unit tests** across nodes, schemas, storage, graph routing, the RAG layer and the evaluation code (`pytest -m "not integration"`, no LLM calls). Each test gets a private vector store and an offline fake embedder; add `and not real_embedder` to skip the few tests that load the real model: `pytest -m "not integration and not real_embedder"`
-- **Golden dataset evaluation** (`evals/run_golden.py`) runs the full pipeline end-to-end against hand-labelled expected outputs using a field-type-aware comparison engine (`enum`, `numeric` ±1 %, `bool`, `date`, `text_lower`; per-field overrides `date_range`, `fuzzy_match` with custom thresholds, `accept_null`)
-- **GitHub Actions CI** (`.github/workflows/ci.yml`) runs three sequential gates on every push to `main` and every pull request into it: unit tests → golden evaluation → `black` lint check. The golden evaluation needs the `DEEPSEEK_API_KEY` secret: it is skipped (with a warning) on fork PRs, but a push without the secret fails the build
+- **Scenario gate** (`evals/run_scenarios.py`) runs one synthetic case per pipeline path end to end with the real model. It gates on the expected outcome and, for stored cases, on every REQUIRED field (field-type-aware comparison: `enum`, `numeric` ±1 %, `bool`, `date`, `text_lower`; per-field overrides `date_range`, `fuzzy_match`, `accept_null`). It is a regression gate, not a quality measurement: quality on real filings is measured by E1
+- **GitHub Actions CI** (`.github/workflows/ci.yml`) runs three sequential gates on every push to `main` and every pull request into it: unit tests → scenario gate → `black` lint check. The scenario gate needs the `DEEPSEEK_API_KEY` secret: it is skipped (with a warning) on fork PRs, but a push without the secret fails the build
 
 ---
 

@@ -2,8 +2,8 @@
 Pipeline entry point — CLI to run the full financial extraction pipeline.
 
 Usage:
-    python -m src.main --file evals/datasets/golden/inputs/ma_microsoft_activision.txt
-    python -m src.main --dir evals/datasets/golden/inputs
+    python -m src.main --file evals/datasets/scenarios/inputs/ma_microsoft_activision.txt
+    python -m src.main --dir evals/datasets/scenarios/inputs
 """
 
 from __future__ import annotations

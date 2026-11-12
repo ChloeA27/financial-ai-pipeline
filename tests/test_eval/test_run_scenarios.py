@@ -1,4 +1,4 @@
-"""The golden runner resolves each case input against the golden directory it is given."""
+"""The scenario runner resolves each case input against the directory it is given."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parents[2] / "evals" / "run_golden.py"
-_spec = importlib.util.spec_from_file_location("evaluate_script_rd", _SCRIPT)
+_SCRIPT = Path(__file__).resolve().parents[2] / "evals" / "run_scenarios.py"
+_spec = importlib.util.spec_from_file_location("run_scenarios_script", _SCRIPT)
 evaluate = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(evaluate)  # type: ignore[union-attr]
 
@@ -42,4 +42,4 @@ def test_default_dir_is_unchanged() -> None:
     default = (
         inspect.signature(evaluate._run_pipeline_for).parameters["base_dir"].default
     )
-    assert default == evaluate.GOLDEN_DIR
+    assert default == evaluate.SCENARIOS_DIR

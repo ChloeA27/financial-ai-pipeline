@@ -1,10 +1,13 @@
 """
-Golden-set evaluator: one end-to-end case per pipeline path, scored by outcome.
+Scenario evaluator: one end-to-end case per pipeline path, scored by outcome.
+
+Called the golden set until 2026-11-12. It is a regression gate on synthetic
+cases, not a labelled quality set; labelled sets are E1 (and later E2).
 
 Pure scoring (no LLM, no I/O besides loading case files). The runner
-``evals/run_golden.py`` executes the pipeline and calls these functions.
+``evals/run_scenarios.py`` executes the pipeline and calls these functions.
 
-Each case (``evals/datasets/golden/cases/<id>.json``) states the outcome the
+Each case (``evals/datasets/scenarios/cases/<id>.json``) states the outcome the
 pipeline must reach: ``stored``, ``out_of_scope``, ``human_review`` or ``dlq``
 (see ``src/schemas/outcome.py``). It also gives the failure stage / category
 for a case that is not stored, and the labelled fields for one that is.
@@ -40,7 +43,7 @@ from src.schemas.outcome import OUTCOME_STORED, OUTCOMES, outcome_of
 # Fallback is "text_lower" (case-insensitive exact match).
 
 FIELD_TYPE_MAP: dict[str, str] = {
-    # Enum fields (must match golden exactly)
+    # Enum fields (must match the expected value exactly)
     "payment_method": "enum",
     "currency": "enum",
     "dividend_type": "enum",
@@ -177,7 +180,7 @@ INCONCLUSIVE_CATEGORIES = frozenset({CAT_TRANSIENT, "config_error"})
 
 
 @dataclass
-class GoldenCase:
+class ScenarioCase:
     case_id: str
     input: str
     purpose: str
@@ -190,16 +193,16 @@ class GoldenCase:
         return [f for f in self.requires if f not in IMPLEMENTED_FEATURES]
 
 
-def load_cases(golden_dir: Path) -> list[GoldenCase]:
-    """Read every ``cases/*.json`` under ``golden_dir``; validate the outcome."""
+def load_cases(scenarios_dir: Path) -> list[ScenarioCase]:
+    """Read every ``cases/*.json`` under ``scenarios_dir``; validate the outcome."""
     cases = []
-    for path in sorted((Path(golden_dir) / "cases").glob("*.json")):
+    for path in sorted((Path(scenarios_dir) / "cases").glob("*.json")):
         data = json.loads(path.read_text(encoding="utf-8"))
         outcome = data["expected"]["outcome"]
         if outcome not in OUTCOMES:
             raise ValueError(f"{path.name}: unknown outcome {outcome!r}")
         cases.append(
-            GoldenCase(
+            ScenarioCase(
                 case_id=data["case_id"],
                 input=data["input"],
                 purpose=data.get("purpose", ""),
@@ -236,7 +239,7 @@ def _check(name: str, expected: Any, actual: Any) -> dict:
     }
 
 
-def score_case(case: GoldenCase, state: dict) -> dict:
+def score_case(case: ScenarioCase, state: dict) -> dict:
     """
     Score one run.
 

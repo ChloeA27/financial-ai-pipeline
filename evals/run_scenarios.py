@@ -1,15 +1,15 @@
 """
-Golden-set runner: run the pipeline end to end on every golden case and gate
-on the result (scoring: ``evals/evaluators/golden.py``).
+Scenario runner: run the pipeline end to end on every scenario case and gate
+on the result (scoring: ``evals/evaluators/scenarios.py``).
 
-Dataset: ``evals/datasets/golden/`` (``cases/*.json`` + ``inputs/``). Every case
+Dataset: ``evals/datasets/scenarios/`` (``cases/*.json`` + ``inputs/``). Every case
 runs in a temporary database, raw store and vector store, so evaluation never
 touches development data.
 
 Usage:
-    python evals/run_golden.py              # run, print, save results/golden/<ts>/
-    python evals/run_golden.py --json       # also print the summary as JSON
-    python evals/run_golden.py --no-save    # CI: print only
+    python evals/run_scenarios.py              # run, print, save results/scenarios/<ts>/
+    python evals/run_scenarios.py --json       # also print the summary as JSON
+    python evals/run_scenarios.py --no-save    # CI: print only
 
 Exit code:
     0 — gate passed: every gating case reached its expected outcome and its
@@ -31,9 +31,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from evals.evaluators.golden import (  # noqa: E402
+from evals.evaluators.scenarios import (  # noqa: E402
     IMPLEMENTED_FEATURES,
-    GoldenCase,
+    ScenarioCase,
     load_cases,
     score_case,
     summarize,
@@ -42,14 +42,14 @@ from src.config import settings  # noqa: E402
 from src.rag.chroma_client import override_chroma_path  # noqa: E402
 from src.workflows.graph import run_pipeline  # noqa: E402
 
-GOLDEN_DIR = REPO_ROOT / "evals" / "datasets" / "golden"
-RESULTS_DIR = REPO_ROOT / "results" / "golden"
+SCENARIOS_DIR = REPO_ROOT / "evals" / "datasets" / "scenarios"
+RESULTS_DIR = REPO_ROOT / "results" / "scenarios"
 
 
 # ── Pipeline execution ───────────────────────────────────────────────
 
 
-def _run_pipeline_for(relative_input: str, base_dir: Path = GOLDEN_DIR) -> dict:
+def _run_pipeline_for(relative_input: str, base_dir: Path = SCENARIOS_DIR) -> dict:
     """
     Run the pipeline on one input inside a temp directory so evaluation
     does NOT pollute the development database or vector store.
@@ -92,7 +92,7 @@ def _tokens(state: dict) -> dict[str, int]:
     }
 
 
-def run_case(case: GoldenCase, base_dir: Path = GOLDEN_DIR) -> dict:
+def run_case(case: ScenarioCase, base_dir: Path = SCENARIOS_DIR) -> dict:
     """Run and score one case; a crash is reported as a failed case."""
     try:
         state = _run_pipeline_for(case.input, base_dir)
@@ -190,30 +190,30 @@ def _save(results: list[dict], summary: dict) -> Path:
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Golden set: outcome gate + field gate.")
+    p = argparse.ArgumentParser(description="Scenario gate: outcome gate + field gate.")
     p.add_argument("--json", action="store_true", help="Print the summary as JSON.")
     p.add_argument(
-        "--no-save", action="store_true", help="Do not write results/golden/."
+        "--no-save", action="store_true", help="Do not write results/scenarios/."
     )
     p.add_argument(
-        "--golden-dir",
+        "--scenarios-dir",
         type=Path,
-        default=GOLDEN_DIR,
-        help=f"Golden dataset directory. Default: {GOLDEN_DIR}",
+        default=SCENARIOS_DIR,
+        help=f"Scenario dataset directory. Default: {SCENARIOS_DIR}",
     )
     return p.parse_args()
 
 
 def main() -> int:
     args = _parse_args()
-    cases = load_cases(args.golden_dir)
+    cases = load_cases(args.scenarios_dir)
     if not cases:
-        print(f"No golden cases found in {args.golden_dir / 'cases'}.")
+        print(f"No scenario cases found in {args.scenarios_dir / 'cases'}.")
         return 1
 
     results = []
     for case in cases:
-        r = run_case(case, args.golden_dir)
+        r = run_case(case, args.scenarios_dir)
         _print_case(r)
         results.append(r)
 

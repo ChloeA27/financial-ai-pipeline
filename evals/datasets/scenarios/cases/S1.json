@@ -26,7 +26,7 @@
       }
     },
     "notes": {
-      "expected_close_date": "Source says 'fiscal year 2023'; golden uses FY end. Accept any date in FY2023 or null"
+      "expected_close_date": "Source says 'fiscal year 2023'; the expected value uses FY end. Accept any date in FY2023 or null"
     }
   }
 }

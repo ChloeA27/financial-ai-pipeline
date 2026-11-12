@@ -468,7 +468,7 @@ class TestRunPipeline:
         """Running on a real file should return a well-structured state."""
         import os
 
-        sample_path = "evals/datasets/golden/inputs/test_ma_pass.txt"
+        sample_path = "evals/datasets/scenarios/inputs/test_ma_pass.txt"
         if not os.path.exists(sample_path):
             pytest.skip(f"Sample file not found: {sample_path}")
 
@@ -496,7 +496,7 @@ class TestRunPipeline:
         """The pipeline should execute all nodes (reader → classifier → extractor → validator)."""
         import os
 
-        sample_path = "evals/datasets/golden/inputs/test_ma_pass.txt"
+        sample_path = "evals/datasets/scenarios/inputs/test_ma_pass.txt"
         if not os.path.exists(sample_path):
             pytest.skip("Sample file not found")
 
@@ -522,7 +522,7 @@ class TestRunPipeline:
         """Running twice on the same file should produce the same key structure."""
         import os
 
-        sample_path = "evals/datasets/golden/inputs/test_ma_pass.txt"
+        sample_path = "evals/datasets/scenarios/inputs/test_ma_pass.txt"
         if not os.path.exists(sample_path):
             pytest.skip("Sample file not found")
 
@@ -558,7 +558,7 @@ class TestEdgeCases:
         """test_ma_fail_loop.txt should exhaust retries and hit DLQ path."""
         import os
 
-        fail_path = "evals/datasets/golden/inputs/test_ma_fail_loop.txt"
+        fail_path = "evals/datasets/scenarios/inputs/test_ma_fail_loop.txt"
         if not os.path.exists(fail_path):
             pytest.skip("Fail-loop sample file not found")
 

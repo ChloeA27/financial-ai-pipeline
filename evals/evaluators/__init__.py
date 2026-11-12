@@ -1,1 +1,1 @@
-"""Scoring code: golden.py (end-to-end extraction), e1.py (classification stage)."""
+"""Scoring code: scenarios.py (end-to-end scenario gate), e1.py (classification stage)."""

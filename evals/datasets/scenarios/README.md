@@ -1,4 +1,7 @@
-# Golden set: synthetic CI gate, one case per pipeline path
+# Scenario set: synthetic CI gate, one case per pipeline path
+
+Called the golden set until 2026-11-12. Renamed because a golden set usually means labelled,
+representative data for measuring quality; this set is neither. The labelled sets are E1 (and later E2).
 
 **Every input is synthetic.** The project author wrote them by hand as test fixtures. They
 are not real SEC filings, even where they name real companies or describe a real event
@@ -6,7 +9,7 @@ are not real SEC filings, even where they name real companies or describe a real
 invented. Inputs added on 2026-11-12 carry the `syn_` prefix. Use these texts only to test
 this pipeline.
 
-The golden set is a **regression gate**, not a quality measurement. It checks that a real
+The scenario set is a **regression gate**, not a quality measurement. It checks that a real
 model, run end to end, still sends each kind of document down the right path. Accuracy on
 real filings is measured by E1 (classification), and later E2 (extraction), on labelled
 EDGAR data. That is why the gate needs one or two cases per path, not many. Each text is
@@ -25,13 +28,13 @@ written to leave the model no room for doubt, so that the gate does not flip bet
 | H3 | `syn_dividend_bad_timeline.txt` | human_review (validate / business_rule) | record and ex-dividend dates fall before the declaration |
 | D1 | `syn_binary_as_txt.txt` | dlq (read / input_error, `DECODE_FAILED`) | binary content stops at read, with no LLM call |
 
-`test_ma_pass.txt` stays in `inputs/` because integration tests use it. It is not a golden
+`test_ma_pass.txt` stays in `inputs/` because integration tests use it. It is not a scenario
 case, because S1 already covers that path.
 
 Paths that need a broken model or a broken API (output that never parses, a quote that
 never matches, an outage) are covered by unit tests with a scripted fake LLM, not here.
 
 Case format (`cases/<id>.json`): `case_id`, `input`, `synthetic`, `purpose`, `requires`
-(features the case depends on, see `IMPLEMENTED_FEATURES` in `evals/evaluators/golden.py`), and
+(features the case depends on, see `IMPLEMENTED_FEATURES` in `evals/evaluators/scenarios.py`), and
 `expected` with `outcome`, optional `doc_type`, `failure` (`stage` / `category` / `code`), and,
 for stored cases, `fields` and `field_overrides`.

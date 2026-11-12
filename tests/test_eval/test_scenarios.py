@@ -1,5 +1,5 @@
 """
-Golden evaluator: outcome gate and field gate are scored separately, pending
+Scenario evaluator: outcome gate and field gate are scored separately, pending
 cases never fail the gate, and an infrastructure failure is inconclusive.
 """
 
@@ -9,14 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from evals.evaluators import golden
-from evals.evaluators.golden import GoldenCase, load_cases, score_case, summarize
+from evals.evaluators import scenarios
+from evals.evaluators.scenarios import ScenarioCase, load_cases, score_case, summarize
 
-GOLDEN_DIR = Path(__file__).resolve().parents[2] / "evals" / "datasets" / "golden"
+SCENARIOS_DIR = Path(__file__).resolve().parents[2] / "evals" / "datasets" / "scenarios"
 
 
-def _case(expected: dict, requires: list[str] | None = None) -> GoldenCase:
-    return GoldenCase(
+def _case(expected: dict, requires: list[str] | None = None) -> ScenarioCase:
+    return ScenarioCase(
         case_id="T",
         input="inputs/x.txt",
         purpose="",
@@ -114,7 +114,7 @@ class TestPendingAndInconclusive:
     def test_pending_case_is_reported_but_never_fails_the_gate(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(golden, "IMPLEMENTED_FEATURES", frozenset())
+        monkeypatch.setattr(scenarios, "IMPLEMENTED_FEATURES", frozenset())
         case = _case({"outcome": "stored"}, requires=["presence_levels"])
         r = score_case(case, _failed("validate", "missing_info"))
         s = summarize([r])
@@ -124,7 +124,7 @@ class TestPendingAndInconclusive:
     def test_pending_case_that_passes_is_flagged(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(golden, "IMPLEMENTED_FEATURES", frozenset())
+        monkeypatch.setattr(scenarios, "IMPLEMENTED_FEATURES", frozenset())
         case = _case(
             {"outcome": "stored", "doc_type": "M&A", "fields": MA},
             requires=["presence_levels"],
@@ -136,7 +136,7 @@ class TestPendingAndInconclusive:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(
-            golden, "IMPLEMENTED_FEATURES", frozenset({"presence_levels"})
+            scenarios, "IMPLEMENTED_FEATURES", frozenset({"presence_levels"})
         )
         case = _case({"outcome": "stored"}, requires=["presence_levels"])
         s = summarize([score_case(case, _failed("validate", "missing_info"))])
@@ -153,14 +153,14 @@ class TestPendingAndInconclusive:
 
 class TestDataset:
     def test_every_case_loads_and_its_input_exists(self) -> None:
-        cases = load_cases(GOLDEN_DIR)
+        cases = load_cases(SCENARIOS_DIR)
         assert cases
         for c in cases:
-            assert (GOLDEN_DIR / c.input).is_file(), c.case_id
+            assert (SCENARIOS_DIR / c.input).is_file(), c.case_id
             assert c.synthetic
 
     def test_every_outcome_is_covered(self) -> None:
-        outcomes = {c.expected["outcome"] for c in load_cases(GOLDEN_DIR)}
+        outcomes = {c.expected["outcome"] for c in load_cases(SCENARIOS_DIR)}
         assert outcomes == {"stored", "out_of_scope", "human_review", "dlq"}
 
     def test_unknown_outcome_is_rejected(self, tmp_path: Path) -> None:
