@@ -173,7 +173,40 @@ def test_pipeline_db_page_renders_four_outcomes_and_the_review_queue(
 
     asyncio.run(fill())
     monkeypatch.setenv("PIPELINE_DB", str(db))
+    import streamlit as st
+
+    st.cache_resource.clear()  # the page caches its DB connection per process
     app = Path(__file__).resolve().parents[2] / "src" / "dashboard.py"
     at = AppTest.from_file(str(app), default_timeout=60).run()
     assert not at.exception, at.exception
     assert any("1 document(s) wait for a person" in w.value for w in at.warning)
+
+
+def test_pipeline_db_page_says_when_the_review_table_is_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An old database is not the same as an empty review queue."""
+    pytest.importorskip("streamlit")
+    pytest.importorskip("plotly")
+    import sqlite3
+
+    from streamlit.testing.v1 import AppTest
+
+    db = tmp_path / "old.db"
+    with sqlite3.connect(db) as conn:  # the tables a pre-2026-11-12 database has
+        conn.executescript(
+            "CREATE TABLE extractions (doc_id TEXT, file_path TEXT, version INT,"
+            " is_current INT, doc_type TEXT, retry_count INT);"
+            "CREATE TABLE dead_letter_queue (file_path TEXT, source_hash TEXT,"
+            " doc_type TEXT, last_error TEXT, retry_count INT, failed_at TEXT);"
+            "CREATE TABLE correction_logs (doc_id TEXT);"
+            "CREATE TABLE documents (source_hash TEXT, last_status TEXT);"
+        )
+    monkeypatch.setenv("PIPELINE_DB", str(db))
+    import streamlit as st
+
+    st.cache_resource.clear()  # the page caches its DB connection per process
+    app = Path(__file__).resolve().parents[2] / "src" / "dashboard.py"
+    at = AppTest.from_file(str(app), default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert any("no review_queue table yet" in i.value for i in at.info)

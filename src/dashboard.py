@@ -107,10 +107,17 @@ df = query("SELECT * FROM extractions")
 df_dlq = query("SELECT * FROM dead_letter_queue")
 df_corr = query("SELECT * FROM correction_logs")
 df_docs = query("SELECT * FROM documents")
-try:
-    df_review = query("SELECT * FROM review_queue ORDER BY updated_at DESC")
-except Exception:  # a database created before the review queue existed
-    df_review = pd.DataFrame()
+_tables = set(
+    query("SELECT name FROM sqlite_master WHERE type = 'table'")["name"].tolist()
+)
+# The dashboard only reads: a database created before 2026-11-12 has no
+# review_queue until the pipeline runs once (init_db adds it).
+has_review_table = "review_queue" in _tables
+df_review = (
+    query("SELECT * FROM review_queue ORDER BY updated_at DESC")
+    if has_review_table
+    else pd.DataFrame()
+)
 df_open = df_review[df_review["status"] == "open"] if len(df_review) else df_review
 
 # One outcome per document: its last run (documents.last_status)
@@ -208,7 +215,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if df_open.empty:
+if not has_review_table:
+    st.info(
+        "This database has no review_queue table yet: it was created before "
+        "2026-11-12. Run the pipeline once on it (for example "
+        "`python -m src.main --dir <folder>`) and init_db adds the table."
+    )
+elif df_open.empty:
     st.success("No open review items.")
 else:
     st.warning(f"{len(df_open)} document(s) wait for a person:")
@@ -243,11 +256,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if df_dlq.empty:
-    st.success("🎉 Dead Letter Queue is empty! All documents processed successfully.")
+# A DLQ row stays as history after a later run settles the document; show only
+# documents whose LAST run ended in the DLQ.
+_dlq_now = set(df_docs.loc[df_docs["last_status"] == "dlq", "source_hash"])
+df_dlq_now = df_dlq[df_dlq["source_hash"].isin(_dlq_now)] if len(df_dlq) else df_dlq
+if len(df_dlq) > len(df_dlq_now):
+    st.caption(
+        f"{len(df_dlq) - len(df_dlq_now)} older DLQ row(s) hidden: a later run of "
+        "the same content ended elsewhere (stored, review or out of scope)."
+    )
+if df_dlq_now.empty:
+    st.success("No document is in the DLQ.")
 else:
-    st.error(f"⚠️ {len(df_dlq)} document(s) permanently failed and entered the DLQ:")
-    for _, row in df_dlq.iterrows():
+    st.error(f"⚠️ {len(df_dlq_now)} document(s) need an engineer:")
+    for _, row in df_dlq_now.iterrows():
         with st.expander(f"💥 {Path(row.file_path).name}"):
             st.json(
                 {
