@@ -5,7 +5,9 @@ PY := .venv/bin/python
 .PHONY: dash test scenarios e4-estimate
 
 dash:  ## all dashboards (E4, E1, pipeline DB) at http://localhost:8501
-	$(PY) -m streamlit run src/app.py
+	@echo "Dashboards: http://localhost:8501  (Ctrl+C to stop)"
+	@(sleep 3; open http://localhost:8501 2>/dev/null || true) &
+	$(PY) -m streamlit run src/app.py --server.headless true
 
 test:  ## offline unit tests (no LLM calls)
 	$(PY) -m pytest -m "not integration" -q
