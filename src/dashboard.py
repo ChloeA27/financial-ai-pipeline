@@ -19,6 +19,8 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
+from src.viz.pipeline_db import read_rows
+
 # ──────────────────────────────────────────────
 #  Constants
 # ──────────────────────────────────────────────
@@ -33,21 +35,13 @@ DB_PATH = Path(
 # ──────────────────────────────────────────────
 #  DB helpers
 # ──────────────────────────────────────────────
-@st.cache_resource
-def get_connection() -> sqlite3.Connection:
-    """Return a cached SQLite connection."""
+def query(sql: str) -> pd.DataFrame:
+    """Run one read-only query (fresh connection per call, see src/viz/pipeline_db.py)."""
     if not DB_PATH.exists():
         st.error(f"❌ Database not found at {DB_PATH}")
         st.stop()
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def query(sql: str) -> pd.DataFrame:
-    """Execute SQL and return results as a DataFrame."""
-    conn = get_connection()
-    return pd.read_sql_query(sql, conn)
+    columns, rows = read_rows(DB_PATH, sql)
+    return pd.DataFrame(rows, columns=columns)
 
 
 # ──────────────────────────────────────────────

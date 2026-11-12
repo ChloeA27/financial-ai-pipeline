@@ -173,9 +173,6 @@ def test_pipeline_db_page_renders_four_outcomes_and_the_review_queue(
 
     asyncio.run(fill())
     monkeypatch.setenv("PIPELINE_DB", str(db))
-    import streamlit as st
-
-    st.cache_resource.clear()  # the page caches its DB connection per process
     app = Path(__file__).resolve().parents[2] / "src" / "dashboard.py"
     at = AppTest.from_file(str(app), default_timeout=60).run()
     assert not at.exception, at.exception
@@ -203,9 +200,6 @@ def test_pipeline_db_page_says_when_the_review_table_is_missing(
             "CREATE TABLE documents (source_hash TEXT, last_status TEXT);"
         )
     monkeypatch.setenv("PIPELINE_DB", str(db))
-    import streamlit as st
-
-    st.cache_resource.clear()  # the page caches its DB connection per process
     app = Path(__file__).resolve().parents[2] / "src" / "dashboard.py"
     at = AppTest.from_file(str(app), default_timeout=60).run()
     assert not at.exception, at.exception
