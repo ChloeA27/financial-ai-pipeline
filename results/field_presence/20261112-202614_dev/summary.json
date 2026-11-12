@@ -1,0 +1,122 @@
+{
+  "dividend": {
+    "verified": {
+      "n": 2,
+      "fields": {
+        "ex_dividend_date": {
+          "hits": 1,
+          "rate": 0.5
+        },
+        "record_date": {
+          "hits": 1,
+          "rate": 0.5
+        },
+        "payment_date": {
+          "hits": 2,
+          "rate": 1.0
+        },
+        "per_share_amount": {
+          "hits": 2,
+          "rate": 1.0
+        },
+        "preferred_mentioned": {
+          "hits": 1,
+          "rate": 0.5
+        },
+        "trading_symbol_on_cover": {
+          "hits": 2,
+          "rate": 1.0
+        }
+      }
+    },
+    "all": {
+      "n": 20,
+      "fields": {
+        "ex_dividend_date": {
+          "hits": 1,
+          "rate": 0.05
+        },
+        "record_date": {
+          "hits": 18,
+          "rate": 0.9
+        },
+        "payment_date": {
+          "hits": 19,
+          "rate": 0.95
+        },
+        "per_share_amount": {
+          "hits": 19,
+          "rate": 0.95
+        },
+        "preferred_mentioned": {
+          "hits": 6,
+          "rate": 0.3
+        },
+        "trading_symbol_on_cover": {
+          "hits": 20,
+          "rate": 1.0
+        }
+      }
+    }
+  },
+  "mna": {
+    "verified": {
+      "n": 6,
+      "fields": {
+        "dollar_amount_million_billion": {
+          "hits": 3,
+          "rate": 0.5
+        },
+        "consideration_wording": {
+          "hits": 2,
+          "rate": 0.3333
+        },
+        "agreement_dated": {
+          "hits": 5,
+          "rate": 0.8333
+        },
+        "exhibit_2_1": {
+          "hits": 3,
+          "rate": 0.5
+        },
+        "termination_fee": {
+          "hits": 0,
+          "rate": 0.0
+        },
+        "trading_symbol_on_cover": {
+          "hits": 6,
+          "rate": 1.0
+        }
+      }
+    },
+    "all": {
+      "n": 28,
+      "fields": {
+        "dollar_amount_million_billion": {
+          "hits": 19,
+          "rate": 0.6786
+        },
+        "consideration_wording": {
+          "hits": 16,
+          "rate": 0.5714
+        },
+        "agreement_dated": {
+          "hits": 21,
+          "rate": 0.75
+        },
+        "exhibit_2_1": {
+          "hits": 15,
+          "rate": 0.5357
+        },
+        "termination_fee": {
+          "hits": 6,
+          "rate": 0.2143
+        },
+        "trading_symbol_on_cover": {
+          "hits": 26,
+          "rate": 0.9286
+        }
+      }
+    }
+  }
+}
