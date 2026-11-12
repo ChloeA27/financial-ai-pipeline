@@ -155,28 +155,45 @@ st.markdown(
 )
 
 if len(df):
+    # One bar per document: how many gold versions it has (SCD Type 2), split
+    # into the active version and archived ones. is_current is 0/1 in SQLite;
+    # map it to labels so Plotly colours it as a category, not a number.
+    versions = (
+        df.assign(
+            state=df["is_current"].map({1: "Active", 0: "Archived"}),
+            document=df["file_path"].map(lambda p: Path(p).name),
+        )
+        .groupby(["document", "doc_id", "state"])
+        .size()
+        .reset_index(name="versions")
+    )
     fig = px.bar(
-        df,
-        x="doc_id",
-        y="version",
-        color="is_current",
-        hover_data={"file_path": True, "doc_type": True, "retry_count": True},
-        labels={
-            "doc_id": "Document ID",
-            "version": "Version",
-            "is_current": "Is Active",
-            "file_path": "Source File",
-        },
-        color_discrete_map={0: "#ff5252", 1: "#00e676"},
-        title="Version Evolution per Document (Red=Archived / Green=Active)",
+        versions,
+        x="versions",
+        y="document",
+        color="state",
+        orientation="h",
+        hover_data={"doc_id": True},
+        labels={"versions": "Versions", "document": "", "state": ""},
+        # Status colours: active = good; archived = neutral (normal, not an error)
+        color_discrete_map={"Active": "#0ca30c", "Archived": "#898781"},
+        category_orders={"state": ["Active", "Archived"]},
+        title="Gold versions per document",
     )
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#e0e0e0"),
-        xaxis_tickangle=-45,
+        bargap=0.35,
+        legend_title_text="",
+        height=120 + 40 * versions["document"].nunique(),
     )
+    fig.update_xaxes(dtick=1, gridcolor="rgba(137,135,129,0.25)")
+    fig.update_traces(marker_line_width=2, marker_line_color="rgba(0,0,0,0)")
     st.plotly_chart(fig, width="stretch")
+    st.caption(
+        "A rerun on changed content archives the old version and adds a new active one "
+        "(SCD Type 2). Rerunning unchanged content adds no version."
+    )
 
     with st.expander("📋 View extractions raw data"):
         st.dataframe(df, width="stretch", height=300)
