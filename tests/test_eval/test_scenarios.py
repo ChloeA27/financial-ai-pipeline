@@ -170,3 +170,27 @@ class TestDataset:
         )
         with pytest.raises(ValueError, match="unknown outcome"):
             load_cases(tmp_path)
+
+
+class TestOverridesAndDiagnostics:
+    def test_one_of_accepts_any_spelling_in_the_source(self) -> None:
+        from evals.evaluators.scenarios import compare_field
+
+        rule = {
+            "mode": "one_of",
+            "values": ["Microsoft Corp.", "Microsoft Corporation"],
+        }
+        assert compare_field(
+            "acquirer", "Microsoft Corporation", "Microsoft Corp.", rule
+        )[0]
+        assert not compare_field("acquirer", "Microsoft", "Microsoft Corp.", rule)[0]
+
+    def test_a_false_accept_records_what_was_stored(self) -> None:
+        case = _case({"outcome": "human_review"})
+        r = score_case(case, _stored(MA | {"target": "a private company (not named)"}))
+        assert r["false_accept"]
+        assert r["stored_fields"]["target"] == "a private company (not named)"
+
+    def test_stored_fields_are_not_repeated_for_correct_stores(self) -> None:
+        case = _case({"outcome": "stored", "doc_type": "M&A", "fields": MA})
+        assert score_case(case, _stored(MA))["stored_fields"] is None

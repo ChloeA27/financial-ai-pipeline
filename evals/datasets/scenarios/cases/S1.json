@@ -23,10 +23,18 @@
         "accept_null": true,
         "range_start": "2023-01-01",
         "range_end": "2023-12-31"
+      },
+      "acquirer": {
+        "mode": "one_of",
+        "values": [
+          "Microsoft Corp.",
+          "Microsoft Corporation"
+        ]
       }
     },
     "notes": {
-      "expected_close_date": "Source says 'fiscal year 2023'; the expected value uses FY end. Accept any date in FY2023 or null"
+      "expected_close_date": "Source says 'fiscal year 2023'; the expected value uses FY end. Accept any date in FY2023 or null",
+      "acquirer": "The source uses both 'Microsoft Corp.' and 'Microsoft Corporation'; either is correct."
     }
   }
 }

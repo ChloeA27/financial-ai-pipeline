@@ -106,6 +106,14 @@ def compare_field(
                 return True, f"date '{actual}' in range [{_start}, {_end}]"
             return False, f"date '{actual}' outside range [{_start}, {_end}]"
 
+        if override_mode == "one_of":
+            # The source names the same entity several ways (e.g. "Corp." and
+            # "Corporation"): any spelling that appears in the text is correct.
+            options = [str(v).strip().lower() for v in overrides.get("values", [])]
+            if str(actual).strip().lower() in options:
+                return True, f"'{actual}' is one of the accepted values"
+            return False, f"'{actual}' is not one of {overrides.get('values')}"
+
         if override_mode == "fuzzy_match":
             threshold = overrides.get("threshold", 0.85)
             ratio = SequenceMatcher(
@@ -309,6 +317,13 @@ def score_case(case: ScenarioCase, state: dict) -> dict:
         "field_warnings": [
             f["field"] for f in fields if not f["passed"] and not f["required"]
         ],
+        # What a wrongly stored document put into gold, so the cause is visible
+        # without a rerun.
+        "stored_fields": (
+            extract_actual_fields(state)
+            if actual_outcome == OUTCOME_STORED and exp["outcome"] != OUTCOME_STORED
+            else None
+        ),
     }
 
 

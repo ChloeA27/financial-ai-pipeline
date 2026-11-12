@@ -1,0 +1,552 @@
+[
+  {
+    "case_id": "D1",
+    "input": "inputs/syn_binary_as_txt.txt",
+    "status": "pass",
+    "gating": true,
+    "pending_features": [],
+    "expected_outcome": "dlq",
+    "actual_outcome": "dlq",
+    "false_accept": false,
+    "failure": {
+      "stage": "read",
+      "code": "DECODE_FAILED",
+      "category": "input_error"
+    },
+    "checks": [
+      {
+        "check": "outcome",
+        "expected": "dlq",
+        "actual": "dlq",
+        "passed": true
+      },
+      {
+        "check": "failure.stage",
+        "expected": "read",
+        "actual": "read",
+        "passed": true
+      },
+      {
+        "check": "failure.category",
+        "expected": "input_error",
+        "actual": "input_error",
+        "passed": true
+      },
+      {
+        "check": "failure.code",
+        "expected": "DECODE_FAILED",
+        "actual": "DECODE_FAILED",
+        "passed": true
+      }
+    ],
+    "fields": [],
+    "field_warnings": [],
+    "tokens": {
+      "llm_calls": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0
+    }
+  },
+  {
+    "case_id": "H1",
+    "input": "inputs/syn_mna_and_dividend.txt",
+    "status": "pass",
+    "gating": true,
+    "pending_features": [],
+    "expected_outcome": "human_review",
+    "actual_outcome": "human_review",
+    "false_accept": false,
+    "failure": {
+      "stage": "classify",
+      "code": "CLASSIFICATION_UNCLEAR",
+      "category": "ambiguous"
+    },
+    "checks": [
+      {
+        "check": "outcome",
+        "expected": "human_review",
+        "actual": "human_review",
+        "passed": true
+      },
+      {
+        "check": "failure.stage",
+        "expected": "classify",
+        "actual": "classify",
+        "passed": true
+      },
+      {
+        "check": "failure.category",
+        "expected": "ambiguous",
+        "actual": "ambiguous",
+        "passed": true
+      }
+    ],
+    "fields": [],
+    "field_warnings": [],
+    "tokens": {
+      "llm_calls": 1,
+      "prompt_tokens": 702,
+      "completion_tokens": 54
+    }
+  },
+  {
+    "case_id": "H2",
+    "input": "inputs/syn_ma_unnamed_target.txt",
+    "status": "fail",
+    "gating": true,
+    "pending_features": [],
+    "expected_outcome": "human_review",
+    "actual_outcome": "stored",
+    "false_accept": true,
+    "failure": null,
+    "checks": [
+      {
+        "check": "outcome",
+        "expected": "human_review",
+        "actual": "stored",
+        "passed": false
+      },
+      {
+        "check": "doc_type",
+        "expected": "M&A",
+        "actual": "M&A",
+        "passed": true
+      },
+      {
+        "check": "failure.stage",
+        "expected": "validate",
+        "actual": null,
+        "passed": false
+      },
+      {
+        "check": "failure.category",
+        "expected": "missing_info",
+        "actual": null,
+        "passed": false
+      },
+      {
+        "check": "failure.code",
+        "expected": "TARGET.NON_EMPTY",
+        "actual": null,
+        "passed": false
+      }
+    ],
+    "fields": [],
+    "field_warnings": [],
+    "tokens": {
+      "llm_calls": 4,
+      "prompt_tokens": 3623,
+      "completion_tokens": 335
+    }
+  },
+  {
+    "case_id": "H3",
+    "input": "inputs/syn_dividend_bad_timeline.txt",
+    "status": "pass",
+    "gating": true,
+    "pending_features": [],
+    "expected_outcome": "human_review",
+    "actual_outcome": "human_review",
+    "false_accept": false,
+    "failure": {
+      "stage": "validate",
+      "code": "TIMELINE_ORDER",
+      "category": "business_rule"
+    },
+    "checks": [
+      {
+        "check": "outcome",
+        "expected": "human_review",
+        "actual": "human_review",
+        "passed": true
+      },
+      {
+        "check": "doc_type",
+        "expected": "Dividend",
+        "actual": "Dividend",
+        "passed": true
+      },
+      {
+        "check": "failure.stage",
+        "expected": "validate",
+        "actual": "validate",
+        "passed": true
+      },
+      {
+        "check": "failure.category",
+        "expected": "business_rule",
+        "actual": "business_rule",
+        "passed": true
+      }
+    ],
+    "fields": [],
+    "field_warnings": [],
+    "tokens": {
+      "llm_calls": 5,
+      "prompt_tokens": 5440,
+      "completion_tokens": 470
+    }
+  },
+  {
+    "case_id": "O1",
+    "input": "inputs/test_ma_fail_loop.txt",
+    "status": "pass",
+    "gating": true,
+    "pending_features": [],
+    "expected_outcome": "out_of_scope",
+    "actual_outcome": "out_of_scope",
+    "false_accept": false,
+    "failure": {
+      "stage": "classify",
+      "code": "UNSUPPORTED_DOC_TYPE",
+      "category": "out_of_scope"
+    },
+    "checks": [
+      {
+        "check": "outcome",
+        "expected": "out_of_scope",
+        "actual": "out_of_scope",
+        "passed": true
+      },
+      {
+        "check": "failure.stage",
+        "expected": "classify",
+        "actual": "classify",
+        "passed": true
+      },
+      {
+        "check": "failure.category",
+        "expected": "out_of_scope",
+        "actual": "out_of_scope",
+        "passed": true
+      }
+    ],
+    "fields": [],
+    "field_warnings": [],
+    "tokens": {
+      "llm_calls": 1,
+      "prompt_tokens": 1115,
+      "completion_tokens": 56
+    }
+  },
+  {
+    "case_id": "O2",
+    "input": "inputs/syn_mgmt_change_only.txt",
+    "status": "pass",
+    "gating": true,
+    "pending_features": [],
+    "expected_outcome": "out_of_scope",
+    "actual_outcome": "out_of_scope",
+    "false_accept": false,
+    "failure": {
+      "stage": "classify",
+      "code": "UNSUPPORTED_DOC_TYPE",
+      "category": "out_of_scope"
+    },
+    "checks": [
+      {
+        "check": "outcome",
+        "expected": "out_of_scope",
+        "actual": "out_of_scope",
+        "passed": true
+      },
+      {
+        "check": "failure.stage",
+        "expected": "classify",
+        "actual": "classify",
+        "passed": true
+      },
+      {
+        "check": "failure.category",
+        "expected": "out_of_scope",
+        "actual": "out_of_scope",
+        "passed": true
+      }
+    ],
+    "fields": [],
+    "field_warnings": [],
+    "tokens": {
+      "llm_calls": 1,
+      "prompt_tokens": 692,
+      "completion_tokens": 47
+    }
+  },
+  {
+    "case_id": "S1",
+    "input": "inputs/ma_microsoft_activision.txt",
+    "status": "fail",
+    "gating": true,
+    "pending_features": [],
+    "expected_outcome": "stored",
+    "actual_outcome": "stored",
+    "false_accept": false,
+    "failure": null,
+    "checks": [
+      {
+        "check": "outcome",
+        "expected": "stored",
+        "actual": "stored",
+        "passed": true
+      },
+      {
+        "check": "doc_type",
+        "expected": "M&A",
+        "actual": "M&A",
+        "passed": true
+      }
+    ],
+    "fields": [
+      {
+        "field": "acquirer",
+        "required": true,
+        "passed": false,
+        "detail": "expected 'Microsoft Corp.', got 'Microsoft Corporation'",
+        "actual": "Microsoft Corporation",
+        "expected": "Microsoft Corp."
+      },
+      {
+        "field": "target",
+        "required": true,
+        "passed": true,
+        "detail": "exact match (case-insensitive)",
+        "actual": "Activision Blizzard, Inc.",
+        "expected": "Activision Blizzard, Inc."
+      },
+      {
+        "field": "total_value_usd",
+        "required": false,
+        "passed": true,
+        "detail": "within 1% tolerance",
+        "actual": 68700000000.0,
+        "expected": 68700000000.0
+      },
+      {
+        "field": "stake_percentage",
+        "required": false,
+        "passed": true,
+        "detail": "within 1% tolerance",
+        "actual": 100.0,
+        "expected": 100.0
+      },
+      {
+        "field": "requires_shareholder_approval",
+        "required": false,
+        "passed": true,
+        "detail": "exact match",
+        "actual": true,
+        "expected": true
+      },
+      {
+        "field": "payment_method",
+        "required": false,
+        "passed": true,
+        "detail": "exact match",
+        "actual": "Cash",
+        "expected": "Cash"
+      },
+      {
+        "field": "announcement_date",
+        "required": false,
+        "passed": true,
+        "detail": "exact match (case-insensitive)",
+        "actual": "2022-01-18",
+        "expected": "2022-01-18"
+      },
+      {
+        "field": "expected_close_date",
+        "required": false,
+        "passed": true,
+        "detail": "null accepted via override",
+        "actual": null,
+        "expected": "2023-06-30"
+      }
+    ],
+    "field_warnings": [],
+    "tokens": {
+      "llm_calls": 2,
+      "prompt_tokens": 1789,
+      "completion_tokens": 148
+    }
+  },
+  {
+    "case_id": "S2",
+    "input": "inputs/dividend_apple_2026.txt",
+    "status": "pass",
+    "gating": true,
+    "pending_features": [],
+    "expected_outcome": "stored",
+    "actual_outcome": "stored",
+    "false_accept": false,
+    "failure": null,
+    "checks": [
+      {
+        "check": "outcome",
+        "expected": "stored",
+        "actual": "stored",
+        "passed": true
+      },
+      {
+        "check": "doc_type",
+        "expected": "Dividend",
+        "actual": "Dividend",
+        "passed": true
+      }
+    ],
+    "fields": [
+      {
+        "field": "ticker",
+        "required": false,
+        "passed": true,
+        "detail": "exact match (case-insensitive)",
+        "actual": "AAPL",
+        "expected": "AAPL"
+      },
+      {
+        "field": "declaration_date",
+        "required": true,
+        "passed": true,
+        "detail": "exact match (case-insensitive)",
+        "actual": "2026-04-30",
+        "expected": "2026-04-30"
+      },
+      {
+        "field": "dividend_cash_amount",
+        "required": true,
+        "passed": true,
+        "detail": "within 1% tolerance",
+        "actual": 0.52,
+        "expected": 0.52
+      },
+      {
+        "field": "currency",
+        "required": false,
+        "passed": true,
+        "detail": "exact match",
+        "actual": "USD",
+        "expected": "USD"
+      },
+      {
+        "field": "record_date",
+        "required": true,
+        "passed": true,
+        "detail": "exact match (case-insensitive)",
+        "actual": "2026-05-12",
+        "expected": "2026-05-12"
+      },
+      {
+        "field": "ex_dividend_date",
+        "required": false,
+        "passed": true,
+        "detail": "exact match (case-insensitive)",
+        "actual": "2026-05-08",
+        "expected": "2026-05-08"
+      },
+      {
+        "field": "payment_date",
+        "required": true,
+        "passed": true,
+        "detail": "exact match (case-insensitive)",
+        "actual": "2026-05-21",
+        "expected": "2026-05-21"
+      },
+      {
+        "field": "dividend_type",
+        "required": false,
+        "passed": true,
+        "detail": "exact match",
+        "actual": "Regular Cash",
+        "expected": "Regular Cash"
+      },
+      {
+        "field": "frequency",
+        "required": false,
+        "passed": true,
+        "detail": "exact match",
+        "actual": "Quarterly",
+        "expected": "Quarterly"
+      }
+    ],
+    "field_warnings": [],
+    "tokens": {
+      "llm_calls": 2,
+      "prompt_tokens": 2340,
+      "completion_tokens": 152
+    }
+  },
+  {
+    "case_id": "S3",
+    "input": "inputs/syn_ma_value_undisclosed.txt",
+    "status": "fail",
+    "gating": false,
+    "pending_features": [
+      "presence_levels"
+    ],
+    "expected_outcome": "stored",
+    "actual_outcome": "human_review",
+    "false_accept": false,
+    "failure": {
+      "stage": "validate",
+      "code": "TOTAL_VALUE_USD.POSITIVE",
+      "category": "missing_info"
+    },
+    "checks": [
+      {
+        "check": "outcome",
+        "expected": "stored",
+        "actual": "human_review",
+        "passed": false
+      },
+      {
+        "check": "doc_type",
+        "expected": "M&A",
+        "actual": "M&A",
+        "passed": true
+      }
+    ],
+    "fields": [],
+    "field_warnings": [],
+    "tokens": {
+      "llm_calls": 5,
+      "prompt_tokens": 4867,
+      "completion_tokens": 420
+    }
+  },
+  {
+    "case_id": "S4",
+    "input": "inputs/syn_dividend_no_exdate.txt",
+    "status": "fail",
+    "gating": false,
+    "pending_features": [
+      "presence_levels"
+    ],
+    "expected_outcome": "stored",
+    "actual_outcome": "human_review",
+    "false_accept": false,
+    "failure": {
+      "stage": "validate",
+      "code": "EX_DIVIDEND_DATE.DATE_FORMAT",
+      "category": "missing_info"
+    },
+    "checks": [
+      {
+        "check": "outcome",
+        "expected": "stored",
+        "actual": "human_review",
+        "passed": false
+      },
+      {
+        "check": "doc_type",
+        "expected": "Dividend",
+        "actual": "Dividend",
+        "passed": true
+      }
+    ],
+    "fields": [],
+    "field_warnings": [],
+    "tokens": {
+      "llm_calls": 5,
+      "prompt_tokens": 5424,
+      "completion_tokens": 375
+    }
+  }
+]
