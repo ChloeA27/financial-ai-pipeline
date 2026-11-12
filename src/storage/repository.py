@@ -6,14 +6,19 @@ that persists one pipeline run, for passed AND failed documents alike:
 
   1. bronze — the source text is written once to the raw store
      (``<raw_store_path>/<sha256>.txt``) and registered in ``documents``;
-  2. gold / DLQ routing:
+  2. routing by outcome (``src/schemas/outcome.py::outcome_of``):
 
-  ✅ Passed validation  → **Branch A**: Idempotent Upsert (SCD Type 2)
-                          If ``source_hash`` changed, the old row is archived
-                          (``is_current=0``) and a new version is inserted.
-  ❌ Failed / exhausted → **Branch B**: Clean write to dead_letter_queue (DLQ);
-                          one row per (file_path, source_hash), refreshed on
-                          repeated failures of the same content.
+  stored        → gold ``extractions``: idempotent upsert (SCD Type 2). If
+                  ``source_hash`` changed, the old row is archived
+                  (``is_current=0``) and a new version is inserted.
+  human_review  → ``review_queue``: one OPEN row per (file_path, source_hash),
+                  refreshed on reruns, for a person to decide.
+  dlq           → ``dead_letter_queue``: one row per (file_path, source_hash),
+                  refreshed on repeated failures, for an engineer.
+  out_of_scope  → no queue; ``documents.last_status`` records it.
+
+  A run that stores the document, or finds it out of scope, closes any open
+  review row of the same content as ``superseded``.
 
   3. silver — every ``step_runs`` record of the run (each LLM call and each
      validation, with its outcome) is appended to ``step_runs``.
@@ -31,6 +36,13 @@ from loguru import logger
 from src.config import settings
 from src.rag.repository import delete_from_vector_store, save_to_vector_store
 from src.schemas.failure import fallback_failure
+from src.schemas.outcome import (
+    OUTCOME_DLQ,
+    OUTCOME_HUMAN_REVIEW,
+    OUTCOME_OUT_OF_SCOPE,
+    OUTCOME_STORED,
+    outcome_of,
+)
 from src.storage.db import get_connection
 from src.storage.raw_store import store_raw
 from src.utils.hashing import content_hash
@@ -78,16 +90,21 @@ class ExtractionRepository:
             raw_uri = await store_raw(source_hash, data)
         final_state = {**final_state, "source_hash": source_hash, "raw_uri": raw_uri}
 
-        # ── Step 2: Route to the correct persistence branch ──
-        validation_passed = final_state.get("validation_passed") is True
-        has_error = bool(final_state.get("error"))
-
-        if validation_passed and not has_error:
+        # ── Step 2: Route by outcome (the same rule evaluation uses) ──
+        status = outcome_of(final_state)
+        if status == OUTCOME_STORED:
             await self._upsert_extraction(final_state)
-            status = "stored"
-        else:
+        elif status == OUTCOME_HUMAN_REVIEW:
+            await self._upsert_review(final_state)
+        elif status == OUTCOME_DLQ:
             await self._insert_dead_letter(final_state)
-            status = "dlq"
+        else:
+            logger.info(
+                "➖ {} → out of scope (no queue)",
+                Path(final_state.get("file_path", "")).name,
+            )
+        if status in (OUTCOME_STORED, OUTCOME_OUT_OF_SCOPE):
+            await self._supersede_reviews(final_state)
 
         # ── Step 3: Register the document and append the run's step records ──
         await self._record_run(final_state, source_hash, raw_uri, status)
@@ -396,6 +413,95 @@ class ExtractionRepository:
             )
         finally:
             await conn.close()
+
+    # ────────────────────────────────────────────────────────────────
+    #  Human review queue
+    # ────────────────────────────────────────────────────────────────
+
+    async def _upsert_review(self, final_state: dict) -> None:
+        """
+        Put a document in front of a person: the reason it stopped, what the
+        model answered and extracted so far. One OPEN row per content: a rerun
+        that stops for review again refreshes it instead of adding a duplicate.
+        """
+        file_path = final_state.get("file_path", "")
+        source_hash = _source_hash(final_state)
+        failure = final_state.get("failure") or fallback_failure(
+            final_state.get("error")
+        )
+        now = _now()
+        columns = (
+            final_state.get("run_id") or None,
+            final_state.get("doc_type"),
+            failure["stage"],
+            failure["code"],
+            failure["category"],
+            failure.get("message") or final_state.get("error"),
+            _to_json(failure.get("details")),
+            _to_json(final_state.get("classification")),
+            _to_json(final_state.get("extracted_data")),
+            _to_json(final_state.get("correction_logs") or []),
+        )
+        conn = await get_connection()
+        try:
+            existing = await _review_rows(conn, file_path, source_hash, "open")
+            if existing:
+                await conn.execute(
+                    "UPDATE review_queue SET run_id = ?, doc_type = ?, "
+                    "reason_stage = ?, reason_code = ?, reason_category = ?, "
+                    "reason_message = ?, failure_details = ?, classification = ?, "
+                    "extracted_data = ?, correction_logs = ?, updated_at = ? "
+                    "WHERE id = ?",
+                    (*columns, now, existing[0]["id"]),
+                )
+            else:
+                await conn.execute(
+                    "INSERT INTO review_queue (file_path, source_hash, run_id, "
+                    "doc_type, reason_stage, reason_code, reason_category, "
+                    "reason_message, failure_details, classification, "
+                    "extracted_data, correction_logs, status, created_at, "
+                    "updated_at) VALUES "
+                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)",
+                    (file_path, source_hash, *columns, now, now),
+                )
+            await conn.commit()
+            logger.warning(
+                "🙋 {} → review_queue | stage={} | code={} | category={}",
+                Path(file_path).name,
+                failure["stage"],
+                failure["code"],
+                failure["category"],
+            )
+        finally:
+            await conn.close()
+
+    async def _supersede_reviews(self, final_state: dict) -> None:
+        """Close open review rows of this content: a later run settled it."""
+        conn = await get_connection()
+        try:
+            await conn.execute(
+                "UPDATE review_queue SET status = 'superseded', updated_at = ?, "
+                "notes = COALESCE(notes, '') || ? "
+                "WHERE file_path = ? AND source_hash = ? AND status = 'open'",
+                (
+                    _now(),
+                    f"closed by run {final_state.get('run_id')} "
+                    f"({outcome_of(final_state)})",
+                    final_state.get("file_path", ""),
+                    _source_hash(final_state),
+                ),
+            )
+            await conn.commit()
+        finally:
+            await conn.close()
+
+
+async def _review_rows(conn, file_path: str, source_hash: str, status: str):
+    return await conn.execute_fetchall(
+        "SELECT id FROM review_queue "
+        "WHERE file_path = ? AND source_hash = ? AND status = ?",
+        (file_path, source_hash, status),
+    )
 
 
 def _to_json(value: Any) -> Optional[str]:

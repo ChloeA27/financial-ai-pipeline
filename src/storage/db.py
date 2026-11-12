@@ -11,10 +11,18 @@ medallion layout (bronze → silver → gold):
                                 outcome): raw LLM reply, parsed output, verdict,
                                 prompt version, tokens, latency.
           correction_logs     — Self-correction audit trail (per loop: classify / extract).
-          dead_letter_queue   — every document that left the pipeline without a
-                                validated extraction, with the stage / code /
-                                category that says where and why.
+          dead_letter_queue   — documents an ENGINEER must act on (infrastructure,
+                                input, pipeline bug, output that never parsed),
+                                with the stage / code / category of the failure.
+          review_queue        — documents a PERSON must decide on (``unclear``,
+                                a missing REQUIRED value, a broken business rule,
+                                a quote never found): the reason, the model's
+                                answer, and the reviewer's decision.
   gold    extractions         — validated results only, SCD Type 2 versioned.
+
+Which table a run goes to is decided by ``src/schemas/outcome.py::outcome_of``
+(stored / out_of_scope / human_review / dlq). An out-of-scope document goes to
+no queue: ``documents.last_status`` says ``out_of_scope``.
 
 ``extraction_sources`` (a 500-character text snippet per result) is no longer
 created: the full text lives in the raw store.  Databases created earlier keep
@@ -64,7 +72,7 @@ CREATE TABLE IF NOT EXISTS documents (
     last_file_path      TEXT NOT NULL,
     last_seen_at        TEXT NOT NULL,
     last_run_id         TEXT,
-    last_status         TEXT            -- 'stored' (gold) | 'dlq' | stage-eval status
+    last_status         TEXT            -- stored | out_of_scope | human_review | dlq | stage-eval status
 );
 
 -- Table 5: step_runs — silver audit trail, one row per node execution
@@ -119,7 +127,40 @@ CREATE TABLE IF NOT EXISTS dead_letter_queue (
     run_id              TEXT
 );
 
+-- Table 6: review_queue — documents a person must decide on
+-- One OPEN row per (file_path, source_hash), refreshed on reruns. A later run
+-- that stores the document (or finds it out of scope) closes the open row as
+-- 'superseded'. Resolved rows are kept as history.
+CREATE TABLE IF NOT EXISTS review_queue (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path           TEXT NOT NULL,
+    source_hash         TEXT NOT NULL,
+    run_id              TEXT,
+    doc_type            TEXT,
+    reason_stage        TEXT NOT NULL,
+    reason_code         TEXT NOT NULL,
+    reason_category     TEXT NOT NULL,
+    reason_message      TEXT,
+    failure_details     TEXT,           -- JSON: every failed rule / problem
+    classification      TEXT,           -- JSON: the classifier's answer + evidence
+    extracted_data      TEXT,           -- JSON: fields extracted so far (may be NULL)
+    correction_logs     TEXT,           -- JSON
+    status              TEXT NOT NULL DEFAULT 'open',  -- open | resolved | superseded
+    decision            TEXT,           -- JSON: the reviewer's label / field values
+    decided_by          TEXT,
+    decided_at          TEXT,
+    notes               TEXT,
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL
+);
+
 -- Indices
+CREATE INDEX IF NOT EXISTS idx_review_status
+    ON review_queue(status, reason_code);
+
+CREATE INDEX IF NOT EXISTS idx_review_doc
+    ON review_queue(file_path, source_hash);
+
 CREATE INDEX IF NOT EXISTS idx_extractions_active_snapshot
     ON extractions(doc_id, is_current);
 

@@ -121,3 +121,59 @@ def test_multipage_app_renders_e4_by_default(
     at = AppTest.from_file(str(app), default_timeout=60).run()
     assert not at.exception, at.exception
     assert at.title[0].value.startswith("E4")
+
+
+def test_pipeline_db_page_renders_four_outcomes_and_the_review_queue(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("streamlit")
+    pytest.importorskip("plotly")
+    import asyncio
+
+    from streamlit.testing.v1 import AppTest
+
+    from src.config import settings
+    from src.storage.db import init_db
+    from src.storage.repository import ExtractionRepository
+
+    db = tmp_path / "p.db"
+    monkeypatch.setattr(settings, "sqlite_db_path", str(db))
+    review = {
+        "file_path": str(tmp_path / "a.txt"),
+        "raw_content": "text a",
+        "doc_type": "M&A",
+        "validation_passed": False,
+        "error": "stop",
+        "extracted_data": {"acquirer": "Acme", "target": None},
+        "failure": {
+            "stage": "validate",
+            "code": "TARGET.NON_EMPTY",
+            "category": "missing_info",
+            "message": "m",
+        },
+    }
+    out_of_scope = {
+        "file_path": str(tmp_path / "b.txt"),
+        "raw_content": "text b",
+        "doc_type": "none",
+        "error": "x",
+        "failure": {
+            "stage": "classify",
+            "code": "UNSUPPORTED_DOC_TYPE",
+            "category": "out_of_scope",
+            "message": "m",
+        },
+    }
+
+    async def fill() -> None:
+        await init_db()
+        repo = ExtractionRepository()
+        await repo.save_extraction(review)
+        await repo.save_extraction(out_of_scope)
+
+    asyncio.run(fill())
+    monkeypatch.setenv("PIPELINE_DB", str(db))
+    app = Path(__file__).resolve().parents[2] / "src" / "dashboard.py"
+    at = AppTest.from_file(str(app), default_timeout=60).run()
+    assert not at.exception, at.exception
+    assert any("1 document(s) wait for a person" in w.value for w in at.warning)

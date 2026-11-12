@@ -445,10 +445,12 @@ class TestDLQFailureColumns:
                 "confidence": 0.9,
                 "reasoning": "r",
             },
+            # structure: an engineering failure, so it goes to the DLQ
+            # (a reference failure would go to the review queue instead)
             "failure": {
                 "stage": "classify_validate",
                 "code": "EVIDENCE_QUOTE_NOT_FOUND",
-                "category": "reference",
+                "category": "structure",
                 "message": "exhausted",
                 "details": {"failures": [{"code": "EVIDENCE_QUOTE_NOT_FOUND"}]},
             },
@@ -480,7 +482,7 @@ class TestDLQFailureColumns:
 
         assert row["failed_stage"] == "classify_validate"
         assert row["error_code"] == "EVIDENCE_QUOTE_NOT_FOUND"
-        assert row["error_category"] == "reference"
+        assert row["error_category"] == "structure"
         assert json.loads(row["failure_details"])["failures"][0]["code"] == (
             "EVIDENCE_QUOTE_NOT_FOUND"
         )
@@ -516,17 +518,17 @@ class TestDLQFailureColumns:
 
         later = dict(classified_failure_state)
         later["failure"] = {
-            "stage": "validate",
-            "code": "TARGET.NON_EMPTY",
-            "category": "missing_info",
+            "stage": "extract",
+            "code": "SCHEMA_PARSE_FAILED",
+            "category": "structure",
             "message": "m",
             "details": None,
         }
         await repo.save_extraction(later)
         row = await self._only_row()
 
-        assert row["failed_stage"] == "validate"
-        assert row["error_code"] == "TARGET.NON_EMPTY"
+        assert row["failed_stage"] == "extract"
+        assert row["error_code"] == "SCHEMA_PARSE_FAILED"
         assert row["failure_details"] is None
 
     async def test_successful_extraction_logs_keep_their_loop(
@@ -624,3 +626,102 @@ class TestSchemaMigration:
         assert len(rows) == 1
         assert rows[0]["last_error"] == "old error"
         assert rows[0]["failed_stage"] is None  # legacy rows stay NULL
+
+
+class TestOutcomeRouting:
+    """Each outcome goes to its own place (src/schemas/outcome.py)."""
+
+    @staticmethod
+    def _state(base: dict[str, Any], category: str, code: str = "X") -> dict[str, Any]:
+        return {
+            **base,
+            "validation_passed": False,
+            "error": "stopped",
+            "failure": {
+                "stage": "validate",
+                "code": code,
+                "category": category,
+                "message": "m",
+                "details": {"failed_rules": [{"code": code}]},
+            },
+        }
+
+    @staticmethod
+    async def _rows(sql: str) -> list[Any]:
+        conn = await get_connection()
+        try:
+            return await conn.execute_fetchall(sql)
+        finally:
+            await conn.close()
+
+    async def test_human_review_goes_to_the_review_queue_not_the_dlq(
+        self, tmp_db: str, failed_extraction_state: dict[str, Any]
+    ) -> None:
+        state = self._state(failed_extraction_state, "missing_info", "TARGET.NON_EMPTY")
+        state["extracted_data"] = {"acquirer": "Acme", "target": None}
+        await ExtractionRepository().save_extraction(state)
+
+        [row] = await self._rows("SELECT * FROM review_queue")
+        assert (row["status"], row["reason_code"]) == ("open", "TARGET.NON_EMPTY")
+        assert row["reason_category"] == "missing_info"
+        assert json.loads(row["extracted_data"]) == state["extracted_data"]
+        assert await self._rows("SELECT * FROM dead_letter_queue") == []
+        [doc] = await self._rows("SELECT last_status FROM documents")
+        assert doc["last_status"] == "human_review"
+
+    async def test_rerun_refreshes_the_open_review_row(
+        self, tmp_db: str, failed_extraction_state: dict[str, Any]
+    ) -> None:
+        repo = ExtractionRepository()
+        await repo.save_extraction(
+            self._state(failed_extraction_state, "missing_info", "A")
+        )
+        await repo.save_extraction(
+            self._state(failed_extraction_state, "business_rule", "B")
+        )
+
+        rows = await self._rows("SELECT status, reason_code FROM review_queue")
+        assert [(r["status"], r["reason_code"]) for r in rows] == [("open", "B")]
+
+    async def test_a_later_stored_run_supersedes_the_open_review(
+        self,
+        tmp_db: str,
+        failed_extraction_state: dict[str, Any],
+        passed_extraction_state: dict[str, Any],
+    ) -> None:
+        repo = ExtractionRepository()
+        review = self._state(failed_extraction_state, "missing_info")
+        await repo.save_extraction(review)
+        same_content = {
+            **passed_extraction_state,
+            "file_path": review["file_path"],
+            "raw_content": review["raw_content"],
+            "source_hash": review.get("source_hash"),
+            "raw_uri": review.get("raw_uri"),
+        }
+        await repo.save_extraction(same_content)
+
+        [row] = await self._rows("SELECT status, notes FROM review_queue")
+        assert row["status"] == "superseded" and "stored" in row["notes"]
+
+    async def test_out_of_scope_writes_no_queue_row(
+        self, tmp_db: str, failed_extraction_state: dict[str, Any]
+    ) -> None:
+        state = self._state(
+            failed_extraction_state, "out_of_scope", "UNSUPPORTED_DOC_TYPE"
+        )
+        await ExtractionRepository().save_extraction(state)
+
+        assert await self._rows("SELECT * FROM review_queue") == []
+        assert await self._rows("SELECT * FROM dead_letter_queue") == []
+        [doc] = await self._rows("SELECT last_status FROM documents")
+        assert doc["last_status"] == "out_of_scope"
+
+    async def test_engineering_failure_still_goes_to_the_dlq(
+        self, tmp_db: str, failed_extraction_state: dict[str, Any]
+    ) -> None:
+        state = self._state(failed_extraction_state, "transient", "LLM_CALL_FAILED")
+        await ExtractionRepository().save_extraction(state)
+
+        assert len(await self._rows("SELECT * FROM dead_letter_queue")) == 1
+        assert await self._rows("SELECT * FROM review_queue") == []

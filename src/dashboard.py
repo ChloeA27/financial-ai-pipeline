@@ -1,9 +1,11 @@
 """
 AI Pipeline Monitoring Dashboard (Streamlit)
 
-Reads data/pipeline.db in real-time and displays:
-  - KPI Dashboard (total processed / successful assets / DLQ failures / avg retries)
-  - Dead Letter Cemetery (red error panel)
+Reads data/pipeline.db (or $PIPELINE_DB) on page load and displays:
+  - Outcomes per document: stored / human review / out of scope / DLQ
+    (``documents.last_status``, set by ``outcome_of``)
+  - Human review queue: open items a person must decide on
+  - Dead Letter Cemetery: items an engineer must act on
   - Self-Correction Audit Trail (per-doc_id drill-down)
 """
 
@@ -84,6 +86,8 @@ st.markdown(
 .fail  .value { color: #ff5252; }
 .total .value { color: #40c4ff; }
 .retry .value { color: #ffd740; }
+.review .value { color: #fab219; }
+.neutral .value { color: #898781; }
 h1, h2, h3 { font-weight: 600; }
 .section-title {
     border-bottom: 2px solid #2a2a4a;
@@ -102,16 +106,15 @@ h1, h2, h3 { font-weight: 600; }
 df = query("SELECT * FROM extractions")
 df_dlq = query("SELECT * FROM dead_letter_queue")
 df_corr = query("SELECT * FROM correction_logs")
+df_docs = query("SELECT * FROM documents")
+try:
+    df_review = query("SELECT * FROM review_queue ORDER BY updated_at DESC")
+except Exception:  # a database created before the review queue existed
+    df_review = pd.DataFrame()
+df_open = df_review[df_review["status"] == "open"] if len(df_review) else df_review
 
-total_files = len(df)
-dlq_count = len(df_dlq)
-
-# Determine success count
-if "validation_passed" in df.columns:
-    success_count = len(df[df["validation_passed"] == 1])
-else:
-    success_count = len(df[df["is_current"] == 1])
-
+# One outcome per document: its last run (documents.last_status)
+status_counts = df_docs["last_status"].value_counts().to_dict() if len(df_docs) else {}
 avg_retry = round(df["retry_count"].mean(), 2) if len(df) else 0.0
 
 # ──────────────────────────────────────────────
@@ -125,32 +128,24 @@ st.caption(f"Data source: `{DB_PATH}` · Last refreshed: on page load")
 # ──────────────────────────────────────────────
 st.markdown('<div class="section-title">📊 Core KPIs</div>', unsafe_allow_html=True)
 
-k1, k2, k3, k4 = st.columns(4)
-
-with k1:
-    st.markdown(
-        f'<div class="card total"><p class="value">{total_files}</p>'
-        f'<p class="label">📂 Total Processed</p></div>',
-        unsafe_allow_html=True,
-    )
-with k2:
-    st.markdown(
-        f'<div class="card pass"><p class="value">{success_count}</p>'
-        f'<p class="label">✅ Successful Assets</p></div>',
-        unsafe_allow_html=True,
-    )
-with k3:
-    st.markdown(
-        f'<div class="card fail"><p class="value">{dlq_count}</p>'
-        f'<p class="label">☠️ Dead Letter Queue</p></div>',
-        unsafe_allow_html=True,
-    )
-with k4:
-    st.markdown(
-        f'<div class="card retry"><p class="value">{avg_retry}</p>'
-        f'<p class="label">🔄 Avg Retry Count</p></div>',
-        unsafe_allow_html=True,
-    )
+_cards = [
+    ("total", len(df_docs), "📂 Documents"),
+    ("pass", status_counts.get("stored", 0), "✅ Stored"),
+    ("review", status_counts.get("human_review", 0), "🙋 Human review"),
+    ("neutral", status_counts.get("out_of_scope", 0), "➖ Out of scope"),
+    ("fail", status_counts.get("dlq", 0), "☠️ DLQ (engineering)"),
+]
+for col, (css, value, label) in zip(st.columns(len(_cards)), _cards):
+    with col:
+        st.markdown(
+            f'<div class="card {css}"><p class="value">{value}</p>'
+            f'<p class="label">{label}</p></div>',
+            unsafe_allow_html=True,
+        )
+st.caption(
+    f"Outcome of each document's last run. Avg retry count of stored assets: {avg_retry}. "
+    "Documents last processed before 2026-11-12 may show 'dlq' for review cases."
+)
 
 # ──────────────────────────────────────────────
 #  2. Version History (Plotly)
@@ -189,10 +184,45 @@ else:
     st.info("ℹ️ No data in extractions table yet")
 
 # ──────────────────────────────────────────────
-#  3. Dead Letter Cemetery (Error Handling)
+#  3. Human review queue (a person decides)
 # ──────────────────────────────────────────────
 st.markdown(
-    '<div class="section-title">☠️ Dead Letter Cemetery — Error Handling</div>',
+    '<div class="section-title">🙋 Human Review Queue — a person must decide</div>',
+    unsafe_allow_html=True,
+)
+
+if df_open.empty:
+    st.success("No open review items.")
+else:
+    st.warning(f"{len(df_open)} document(s) wait for a person:")
+    st.dataframe(
+        df_open[
+            [
+                "file_path",
+                "doc_type",
+                "reason_stage",
+                "reason_code",
+                "reason_category",
+                "updated_at",
+            ]
+        ],
+        hide_index=True,
+        width="stretch",
+    )
+    for _, row in df_open.iterrows():
+        with st.expander(f"🙋 {Path(row.file_path).name} — {row.reason_code}"):
+            st.write(row.reason_message)
+            for col in ("extracted_data", "classification", "failure_details"):
+                value = row.get(col)
+                if isinstance(value, str) and value:
+                    st.caption(col)
+                    st.code(value, language="json")
+
+# ──────────────────────────────────────────────
+#  4. Dead Letter Cemetery (an engineer acts)
+# ──────────────────────────────────────────────
+st.markdown(
+    '<div class="section-title">☠️ Dead Letter Cemetery — an engineer must act</div>',
     unsafe_allow_html=True,
 )
 
@@ -229,7 +259,7 @@ else:
             )
 
 # ──────────────────────────────────────────────
-#  4. Self-Correction Audit Trail
+#  5. Self-Correction Audit Trail
 # ──────────────────────────────────────────────
 st.markdown(
     '<div class="section-title">🔍 Self-Correction Audit Trail</div>',
