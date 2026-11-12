@@ -14,7 +14,7 @@ import pytest
 from src.viz import e1_data as d
 from tests.test_nodes.test_extractor import FakeOpenAI
 
-_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "eval_classification.py"
+_SCRIPT = Path(__file__).resolve().parents[2] / "evals" / "run_e1.py"
 _spec = importlib.util.spec_from_file_location("eval_classification_viz", _SCRIPT)
 cli = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cli)  # type: ignore[union-attr]

@@ -1,0 +1,117 @@
+{
+  "gate_passed": true,
+  "cases": 10,
+  "gating_cases": 8,
+  "outcome_correct": 8,
+  "outcome_scored": 8,
+  "failed": [],
+  "inconclusive": [],
+  "false_accepts": [],
+  "pending": {
+    "S3": [
+      "presence_levels"
+    ],
+    "S4": [
+      "presence_levels"
+    ]
+  },
+  "pending_now_passing": [],
+  "confusion": [
+    {
+      "expected": "dlq",
+      "actual": "dlq",
+      "count": 1
+    },
+    {
+      "expected": "human_review",
+      "actual": "human_review",
+      "count": 3
+    },
+    {
+      "expected": "out_of_scope",
+      "actual": "out_of_scope",
+      "count": 2
+    },
+    {
+      "expected": "stored",
+      "actual": "human_review",
+      "count": 2
+    },
+    {
+      "expected": "stored",
+      "actual": "stored",
+      "count": 2
+    }
+  ],
+  "field_accuracy": {
+    "acquirer": {
+      "passed": 1,
+      "total": 1
+    },
+    "target": {
+      "passed": 1,
+      "total": 1
+    },
+    "total_value_usd": {
+      "passed": 1,
+      "total": 1
+    },
+    "stake_percentage": {
+      "passed": 1,
+      "total": 1
+    },
+    "requires_shareholder_approval": {
+      "passed": 1,
+      "total": 1
+    },
+    "payment_method": {
+      "passed": 1,
+      "total": 1
+    },
+    "announcement_date": {
+      "passed": 1,
+      "total": 1
+    },
+    "expected_close_date": {
+      "passed": 1,
+      "total": 1
+    },
+    "ticker": {
+      "passed": 1,
+      "total": 1
+    },
+    "declaration_date": {
+      "passed": 1,
+      "total": 1
+    },
+    "dividend_cash_amount": {
+      "passed": 1,
+      "total": 1
+    },
+    "currency": {
+      "passed": 1,
+      "total": 1
+    },
+    "record_date": {
+      "passed": 1,
+      "total": 1
+    },
+    "ex_dividend_date": {
+      "passed": 1,
+      "total": 1
+    },
+    "payment_date": {
+      "passed": 1,
+      "total": 1
+    },
+    "dividend_type": {
+      "passed": 1,
+      "total": 1
+    },
+    "frequency": {
+      "passed": 1,
+      "total": 1
+    }
+  },
+  "field_warnings": {}
+}

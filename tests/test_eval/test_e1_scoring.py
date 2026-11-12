@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from src.evaluation import e1
+from evals.evaluators import e1
 
 
 def _case(labels, *, ambiguous=False, acceptable=None, verified=True, group="typical"):
@@ -174,6 +174,20 @@ class TestSummarize:
         assert s["per_label"]["dividend"]["recall"] == 0.0
         assert s["none_specificity"] == 0.5
         assert s["confusion_verified"]["none -> mna"] == 1
+
+    def test_accepted_unclear_is_a_hand_off_not_a_miss(self) -> None:
+        rows = [
+            # mna+dividend answered "unclear": accepted → left out of recall
+            _rec("a", "unclear", True, gold=("dividend", "mna")),
+            # single-label mna answered "unclear": not accepted → still a miss
+            _rec("b", "unclear", False, gold=("mna",)),
+            _rec("c", "mna", True, gold=("mna",)),
+        ]
+        s = e1.summarize(rows)
+        assert s["unclear_accepted"] == 1
+        assert s["per_label"]["mna"] == {"precision": 1.0, "recall": 0.5, "support": 2}
+        assert s["per_label"]["dividend"]["support"] == 0
+        assert s["accuracy_verified"] == round(2 / 3, 4)
 
     def test_failure_and_retry_rates(self) -> None:
         rows = [

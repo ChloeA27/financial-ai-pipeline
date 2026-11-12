@@ -25,7 +25,8 @@ from typing import Any, Optional
 from pydantic import ValidationError
 
 from src.config import settings
-from src.state.pipeline_state import CorrectionLog, FailureInfo, PipelineState
+from src.schemas.events import CorrectionLog, FailureInfo
+from src.schemas.state import PipelineState
 
 LOOP_CLASSIFY = "classify"
 LOOP_EXTRACT = "extract"
@@ -62,6 +63,7 @@ def _register(
     report: str,
     exhausted_message: str,
     failure: Optional[FailureInfo],
+    retryable: bool = True,
 ) -> dict[str, Any]:
     retries_used = state.get(count_key, 0)
     budget = state.get(budget_key, default_budget)
@@ -78,7 +80,9 @@ def _register(
     )
 
     update: dict[str, Any] = {"correction_logs": logs}
-    if retries_used >= budget:
+    # A non-retryable failure (see src/schemas/retry_policy.py) stops the loop
+    # now, whatever budget is left: another attempt could only make it worse.
+    if not retryable or retries_used >= budget:
         update[count_key] = retries_used
         update["error"] = exhausted_message
         if failure is not None:
@@ -95,6 +99,7 @@ def register_failure(
     report: str,
     exhausted_message: str,
     failure: Optional[FailureInfo] = None,
+    retryable: bool = True,
 ) -> dict[str, Any]:
     """
     Record one failed *extraction* attempt and decide whether a retry is allowed.
@@ -103,7 +108,8 @@ def register_failure(
       - ``correction_logs`` with a new entry (``cycle`` is the 1-indexed
         number of the failed attempt within the extract loop);
       - ``retry_count`` + 1 while budget remains;
-      - once the budget is spent, ``retry_count`` stays at ``max_retries``,
+      - once the budget is spent, or at once when ``retryable`` is False,
+        ``retry_count`` stays where it is,
         ``error`` is set to ``exhausted_message`` and ``failure`` (if given)
         is recorded (→ DLQ).
     """
@@ -117,6 +123,7 @@ def register_failure(
         report=report,
         exhausted_message=exhausted_message,
         failure=failure,
+        retryable=retryable,
     )
 
 

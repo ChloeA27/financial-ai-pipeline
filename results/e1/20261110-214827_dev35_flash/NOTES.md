@@ -13,3 +13,10 @@
 - E1-024: gold evidence is outside the head window, yet head answered `mna` correctly in both
   repetitions with another valid quote → gold-evidence coverage is a conservative proxy.
 - The 18 unverified cases are aggregate-only here; their model answers are in `_sealed/`.
+
+## Addendum 2026-11-11
+
+- `deepseek-flash` runs in thinking mode by default, and DeepSeek's thinking-mode guide says
+  temperature "will not trigger an error but will also have no effect" there. The
+  `temperature: 0` recorded in this run's manifest was therefore not applied.
+- Rerun with thinking disabled (the only change): `../20261111-211954_dev35_flash_nothink/`.

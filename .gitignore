@@ -15,13 +15,6 @@ venv/
 *.db
 data/
 
-# Output
-output/*.json
-
-# Logs
-logs/*.log
-logs/*.log.*
-
 # IDE
 .idea/
 .vscode/
@@ -44,3 +37,4 @@ htmlcov/
 results/**/run.db*
 results/**/raw/
 results/**/chroma/
+results/**/_local/

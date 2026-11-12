@@ -10,7 +10,8 @@ from typing import Any
 
 import pytest
 
-from src.nodes.classifier import ClassificationResult, classifier_node
+from src.nodes.classifier import classifier_node
+from src.schemas.classification import ClassificationResult
 from tests.test_nodes.test_extractor import FakeOpenAI
 
 TEXT = "Acme to acquire Widgets Inc. for $1B in cash."
@@ -208,3 +209,41 @@ class TestFeedbackAndFailures:
     async def test_skips_when_a_previous_node_failed(self, fake_llm) -> None:
         assert await classifier_node(_state(error="boom")) == {}
         assert fake_llm.calls == []
+
+
+class TestThinkingMode:
+    """The classifier turns DeepSeek thinking off by default (output truncation fix)."""
+
+    async def test_request_disables_thinking_and_step_records_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from types import SimpleNamespace
+
+        sent: list[dict[str, Any]] = []
+
+        class CapturingOpenAI:
+            def __init__(self, **_: Any) -> None:
+                self.chat = SimpleNamespace(
+                    completions=SimpleNamespace(create=self._create)
+                )
+
+            async def _create(self, **kwargs: Any) -> Any:
+                sent.append(kwargs)
+                return SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(message=SimpleNamespace(content=_answer()))
+                    ]
+                )
+
+            async def close(self) -> None:
+                return None
+
+        monkeypatch.setattr("src.llm.client.AsyncOpenAI", CapturingOpenAI)
+        update = await classifier_node(_state())
+
+        assert sent[0]["extra_body"] == {"thinking": {"type": "disabled"}}
+        assert sent[0]["max_tokens"] == 1024
+        recorded = update["step_runs"][0]["output"]["input"]
+        assert recorded["thinking"] == "disabled"
+        assert recorded["max_tokens"] == 1024
+        assert "reasoning_tokens" in recorded

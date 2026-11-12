@@ -42,7 +42,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
 
-      # Both the real_embedder tests and the golden eval load all-MiniLM-L6-v2;
+      # Both the real_embedder tests and the scenario gate load all-MiniLM-L6-v2;
       # without this cache every run re-downloads it from the Hugging Face Hub.
       - name: Cache embedding model
         uses: actions/cache@v4
@@ -57,7 +57,7 @@ jobs:
           DEEPSEEK_API_KEY: "sk-placeholder-for-ci"
 
       # Repository secrets are not exposed to pull requests from forks, so the
-      # golden eval cannot run there. Skip it with a visible warning — but on
+      # scenario gate cannot run there. Skip it with a visible warning — but on
       # a push to main a missing key must fail the build, otherwise the quality
       # gate could be bypassed silently.
       - name: Check LLM secret availability
@@ -68,19 +68,19 @@ jobs:
           if [ -n "$DEEPSEEK_API_KEY" ]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           elif [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            echo "::error::DEEPSEEK_API_KEY secret is not set; the golden dataset gate cannot run on a push."
+            echo "::error::DEEPSEEK_API_KEY secret is not set; the scenario gate cannot run on a push."
             exit 1
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::DEEPSEEK_API_KEY is not available (pull request from a fork?). Golden dataset evaluation was SKIPPED."
+            echo "::warning::DEEPSEEK_API_KEY is not available (pull request from a fork?). Scenario gate was SKIPPED."
           fi
 
-      - name: Golden dataset evaluation
+      - name: Scenario gate (real LLM, end to end)
         if: steps.llm.outputs.available == 'true'
-        run: python scripts/evaluate.py --threshold 0.85 --json
+        run: python evals/run_scenarios.py --no-save --json
         env:
           PYTHONPATH: "."
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
 
       - name: Lint check (black)
-        run: black --check --diff src/ tests/ scripts/
+        run: black --check --diff src/ tests/ evals/

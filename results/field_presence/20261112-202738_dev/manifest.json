@@ -1,0 +1,30 @@
+{
+  "created_at_utc": "20261112-202738",
+  "dataset_file": "e1_dataset_draft.jsonl",
+  "dataset_sha256": "9b2832a6cff2797ef417624693f54cb1811f801ccb8e1771be87bafae4d6bbbf",
+  "split": "dev",
+  "cases_in_split": 100,
+  "method": "case-insensitive regex over whitespace-normalised text; no LLM",
+  "patterns": {
+    "dividend": {
+      "ex_dividend_date": "ex-?\\s?dividend|ex-?date",
+      "record_date": "record date|of record|holders of record",
+      "payment_date": "payable|payment date|paid on|to be paid",
+      "per_share_amount": "\\$\\s?\\d+(?:\\.\\d+)?\\s*(?:per|a)\\s+(?:common\\s+|ordinary\\s+)?share",
+      "preferred_mentioned": "preferred (?:stock|shares)|series [A-Z] ",
+      "trading_symbol_on_cover": "trading symbol"
+    },
+    "mna": {
+      "dollar_amount_million_billion": "\\$\\s?\\d[\\d,.]*\\s*(?:million|billion)",
+      "consideration_wording": "cash consideration|merger consideration|per share in cash|exchange ratio|shares of .{0,40}common stock for each",
+      "agreement_dated": "(?:agreement and plan of merger|purchase agreement|merger agreement)[^.]{0,80}dated (?:as of )?(?:January|February|March|April|May|June|July|August|September|October|November|December)\\.? \\d{1,2},? \\d{4}",
+      "exhibit_2_1": "exhibit 2\\.1|\\b2\\.1\\b[^.]{0,60}agreement",
+      "termination_fee": "termination fee",
+      "trading_symbol_on_cover": "trading symbol"
+    }
+  },
+  "git": {
+    "commit": "bbf8918d86ddcee0dc256d0cc18637ed773ff125",
+    "dirty": true
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "case_id": "H1",
+  "input": "inputs/syn_mna_and_dividend.txt",
+  "synthetic": true,
+  "purpose": "An acquisition and a special dividend in one release: the single-label classifier hands it to a human.",
+  "requires": [],
+  "expected": {
+    "outcome": "human_review",
+    "failure": {
+      "stage": "classify",
+      "category": "ambiguous"
+    }
+  }
+}

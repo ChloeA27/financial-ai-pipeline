@@ -24,7 +24,7 @@ from typing import Optional
 import aiofiles
 
 from src.config import settings
-from src.state.failure import (
+from src.schemas.failure import (
     CAT_INPUT_ERROR,
     DECODE_FAILED,
     FILE_NOT_FOUND,
@@ -32,7 +32,7 @@ from src.state.failure import (
     STAGE_READ,
     make_failure,
 )
-from src.state.pipeline_state import PipelineState
+from src.schemas.state import PipelineState
 from src.storage.raw_store import store_raw
 from src.utils.hashing import content_hash
 
@@ -154,7 +154,9 @@ async def read_single_file(file_path: str) -> PipelineState:
     )
 
 
-async def read_directory(raw_dir: str = "raw_data/sample") -> list[PipelineState]:
+async def read_directory(
+    raw_dir: str = "evals/datasets/scenarios/inputs",
+) -> list[PipelineState]:
     """
     Scan a directory for ``.txt`` files and read every one concurrently.
 

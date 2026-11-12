@@ -41,7 +41,7 @@ from difflib import SequenceMatcher
 from typing import Any, Optional
 
 from src.config import settings
-from src.nodes.classifier import (
+from src.schemas.classification import (
     ALL_LABELS,
     OUT_OF_SCOPE_LABEL,
     SUPPORTED_DOC_TYPES,
@@ -55,7 +55,7 @@ from src.nodes.step_runs import (
     make_step_run,
     outcome_of,
 )
-from src.state.failure import (
+from src.schemas.failure import (
     CAT_AMBIGUOUS,
     CAT_OUT_OF_SCOPE,
     CAT_REFERENCE,
@@ -71,7 +71,7 @@ from src.state.failure import (
     UNSUPPORTED_DOC_TYPE,
     make_failure,
 )
-from src.state.pipeline_state import PipelineState
+from src.schemas.state import PipelineState
 
 # A quote shorter than this is too easy to match by accident ("the Merger").
 MIN_QUOTE_CHARS = 25

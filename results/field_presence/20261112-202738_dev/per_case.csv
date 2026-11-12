@@ -1,0 +1,9 @@
+case_id,label,ex_dividend_date,record_date,payment_date,per_share_amount,preferred_mentioned,trading_symbol_on_cover,dollar_amount_million_billion,consideration_wording,agreement_dated,exhibit_2_1,termination_fee
+E1-005,dividend,False,True,True,True,True,True,,,,,
+E1-009,dividend,True,False,True,True,False,True,,,,,
+E1-020,mna,,,,,,True,True,True,True,False,False
+E1-021,mna,,,,,,True,False,False,False,True,False
+E1-023,mna,,,,,,True,False,False,True,False,False
+E1-024,mna,,,,,,True,True,True,True,True,False
+E1-026,mna,,,,,,True,False,False,True,True,False
+E1-028,mna,,,,,,True,True,False,True,False,False

@@ -120,7 +120,7 @@ class TestUndecodableFileEndToEnd:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         from src.config import settings
-        from src.graph.builder import run_pipeline
+        from src.workflows.graph import run_pipeline
         from src.storage.db import get_connection, init_db
         from src.storage.repository import ExtractionRepository
         from tests.test_nodes.test_extractor import FakeOpenAI

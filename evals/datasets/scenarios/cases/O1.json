@@ -1,0 +1,14 @@
+{
+  "case_id": "O1",
+  "input": "inputs/test_ma_fail_loop.txt",
+  "synthetic": true,
+  "purpose": "Analyst speculation about a possible deal is out of scope, never stored.",
+  "requires": [],
+  "expected": {
+    "outcome": "out_of_scope",
+    "failure": {
+      "stage": "classify",
+      "category": "out_of_scope"
+    }
+  }
+}

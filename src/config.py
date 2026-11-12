@@ -29,7 +29,19 @@ class Settings(BaseSettings):
         "head"  # head (V0) | structured (V1) | keyword (V2)
     )
     classifier_input_tokens: int = 3500  # budget for structured / keyword
-    classify_temperature: float = 0.05
+    classify_temperature: float = 0.05  # no effect while thinking is enabled
+    # DeepSeek thinking mode for the classifier: "disabled" | "enabled" | ""
+    # ("" = do not send the parameter, provider default).  Thinking spends
+    # hidden reasoning tokens inside max_tokens, which truncated 26 of 233
+    # replies at 1,024 tokens in the first E1 run, and it ignores temperature.
+    classify_thinking: str = "disabled"
+    classify_max_tokens: int = 1024
+
+    # ── LLM transport (retries of transient failures: timeout, 429, 5xx) ──
+    # Handled by the OpenAI SDK with exponential backoff; separate from the
+    # self-correction budgets below, which are about the model's answers.
+    llm_max_retries: int = 2
+    llm_timeout_seconds: float = 60.0
 
     # ── Pipeline ──
     max_retries: int = 3  # extraction self-correction budget
