@@ -530,13 +530,10 @@ Links between layers: `step_runs.run_id` groups one invocation; `source_hash` (i
 
 > **Persistence timing.** Nodes only *return* their `step_runs` records (an `operator.add` reducer on the state concatenates them); everything is written by the Repository after the graph finishes. A process killed mid-run therefore loses that run's records — acceptable for batch reruns, and the reason a checkpointer would be the next step if resumability were needed.
 
-Optional extra output:
+Storage is a single SQLite database (the JSON-per-document export was removed
+on 2026-11-12: it duplicated the gold and silver layers as a second source of truth):
 
-1. **JSON File** — human-readable, one per document (including its `step_runs`)
-   - Writer: `src/storage/json_writer.py`
-   - Output path: `output/{filename}_result.json` (only with `--output`)
-
-2. **SQLite Database** — queryable, versioned, machine-parseable
+- **SQLite Database** — queryable, versioned, machine-parseable
    - Connection: `aiosqlite` with WAL mode
    - Schema: `src/storage/db.py` (`documents`, `step_runs`, `extractions`, `correction_logs`, `dead_letter_queue`)
 
@@ -632,20 +629,16 @@ The `ExtractionRepository` class (`src/storage/repository.py`) acts as the singl
 ```python
 class ExtractionRepository:
     async def save_extraction(self, final_state: dict) -> None:
-        # Step 1: JSON debug output, only if an output dir was given (--output)
-        if self._output_dir:
-            await write_json_output(final_state, self._output_dir)
-
-        # Step 2: bronze — write-once copy of the source text
+        # Step 1: bronze — write-once copy of the source text
         raw_uri = await store_raw(source_hash, final_state["raw_content"])
 
-        # Step 3: Route to correct branch
+        # Step 2: Route to correct branch
         if validated:
             await self._upsert_extraction(final_state)    # Branch A (gold)
         else:
             await self._insert_dead_letter(final_state)   # Branch B (DLQ)
 
-        # Step 4: documents registry + every step_runs record of this run
+        # Step 3: documents registry + every step_runs record of this run
         await self._record_run(final_state, source_hash, raw_uri, status)
 ```
 
@@ -1049,10 +1042,8 @@ financial-ai-pipeline/
 │       ├── __init__.py           ← Repository + init_db exports
 │       ├── db.py                 ← aiosqlite connection + schema DDL + migrations
 │       ├── raw_store.py          ← bronze: write-once content-addressed texts
-│       ├── json_writer.py        ← JSON file dual-write
 │       └── repository.py         ← raw + gold/DLQ + step_runs persistence
 │
-├── output/                       ← JSON dual-write artefacts (local, git-ignored)
 ├── data/                         ← SQLite database + raw/ bronze texts (local, git-ignored)
 │
 ├── tests/                        ← mirrors src/

@@ -15,9 +15,6 @@ venv/
 *.db
 data/
 
-# Output
-output/*.json
-
 # IDE
 .idea/
 .vscode/

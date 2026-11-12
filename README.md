@@ -93,7 +93,7 @@ Every run is persisted in a medallion layout — passed **and** failed documents
 | Silver (staging) | One `step_runs` row per node execution — every classifier / extractor call and every validation, passed, rejected or fatal: raw LLM reply, parsed output, verdict, error code, model, prompt version (hash of the exact system message), tokens, latency. Plus `dead_letter_queue` and `correction_logs` | `data/pipeline.db` |
 | Gold (curated) | Validated extractions only, SCD Type 2 versioned; each row carries `run_id` and `source_hash`, linking it to its step trail and its exact source text | `data/pipeline.db` → `extractions` |
 
-There is no LLM-as-judge yet, so "gold" means *passed the deterministic validators*, not *verified correct*. If `--output <dir>` is given, a JSON file per document (including its step trail) is also written there.
+There is no LLM-as-judge yet, so "gold" means *passed the deterministic validators*, not *verified correct*.
 
 Failure stages recorded in the DLQ: `read`, `classify`, `classify_validate`, `extract`, `validate` (and `pipeline` for a crash outside the graph). Categories: `transient`, `structure`, `reference`, `missing_info`, `business_rule`, `out_of_scope`, `ambiguous`, `input_error`, `unknown`. Older databases are migrated in place (`ALTER TABLE … ADD COLUMN`) the next time `init_db()` runs; rows written before the migration keep `NULL` in the new columns.
 
@@ -289,7 +289,6 @@ financial-ai-pipeline/
 │   └── storage/
 │       ├── db.py                    ← aiosqlite schema DDL + in-place migrations
 │       ├── raw_store.py             ← bronze: write-once content-addressed source texts
-│       ├── json_writer.py           ← JSON dual-write
 │       └── repository.py            ← raw + gold/DLQ + step_runs persistence
 │
 └── tests/                          ← unit + integration tests, mirrors src/

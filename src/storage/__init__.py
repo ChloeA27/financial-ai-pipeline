@@ -6,7 +6,7 @@ Exports the high-level interface used by main.py:
     from src.storage import ExtractionRepository, init_db
 
     await init_db()
-    repo = ExtractionRepository(output_dir="./output")
+    repo = ExtractionRepository()
     await repo.save_extraction(final_state)
 """
 

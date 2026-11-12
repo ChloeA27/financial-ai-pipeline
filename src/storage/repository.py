@@ -34,7 +34,6 @@ from src.schemas.failure import fallback_failure
 from src.storage.db import get_connection
 from src.storage.raw_store import store_raw
 from src.utils.hashing import content_hash
-from src.storage.json_writer import write_json_output
 
 
 def _now() -> str:
@@ -54,16 +53,14 @@ def _source_hash(final_state: dict) -> str:
 
 class ExtractionRepository:
     """
-    Persistence repository — coordinates JSON dual-write & SQLite storage.
+    Persistence repository — writes one pipeline run to SQLite (bronze
+    ``documents``, silver ``step_runs`` / DLQ, gold ``extractions``).
 
     Usage::
 
-        repo = ExtractionRepository(output_dir="./output")
+        repo = ExtractionRepository()
         await repo.save_extraction(final_state)
     """
-
-    def __init__(self, output_dir: str = "") -> None:
-        self._output_dir = output_dir
 
     # ────────────────────────────────────────────────────────────────
     #  Public API
@@ -71,11 +68,7 @@ class ExtractionRepository:
 
     async def save_extraction(self, final_state: dict) -> None:
         """Persist one pipeline run: raw text, gold-or-DLQ row, step audit trail."""
-        # ── Step 1: Always write the debug JSON file ──
-        if self._output_dir:
-            await write_json_output(final_state, self._output_dir)
-
-        # ── Step 2: Bronze — the Reader already stored the file's bytes; ──
+        # ── Step 1: Bronze — the Reader already stored the file's bytes; ──
         #    states that were not built from a file get their text stored now.
         raw_uri = final_state.get("raw_uri")
         source_hash = final_state.get("source_hash")
@@ -85,7 +78,7 @@ class ExtractionRepository:
             raw_uri = await store_raw(source_hash, data)
         final_state = {**final_state, "source_hash": source_hash, "raw_uri": raw_uri}
 
-        # ── Step 3: Route to the correct persistence branch ──
+        # ── Step 2: Route to the correct persistence branch ──
         validation_passed = final_state.get("validation_passed") is True
         has_error = bool(final_state.get("error"))
 
@@ -96,7 +89,7 @@ class ExtractionRepository:
             await self._insert_dead_letter(final_state)
             status = "dlq"
 
-        # ── Step 4: Register the document and append the run's step records ──
+        # ── Step 3: Register the document and append the run's step records ──
         await self._record_run(final_state, source_hash, raw_uri, status)
 
     async def save_steps_only(self, final_state: dict, status: str) -> None:

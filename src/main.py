@@ -3,7 +3,7 @@ Pipeline entry point — CLI to run the full financial extraction pipeline.
 
 Usage:
     python -m src.main --file evals/datasets/golden/inputs/ma_microsoft_activision.txt
-    python -m src.main --dir evals/datasets/golden/inputs --output output
+    python -m src.main --dir evals/datasets/golden/inputs
 """
 
 from __future__ import annotations
@@ -251,12 +251,6 @@ async def main() -> None:
         help="Directory containing raw .txt files to batch-process concurrently.",
     )
     parser.add_argument(
-        "--output",
-        type=str,
-        default=None,
-        help="Optional: directory to write JSON output files.",
-    )
-    parser.add_argument(
         "--log-level",
         type=str,
         default="INFO",
@@ -278,7 +272,7 @@ async def main() -> None:
 
     # ── Initialise DB + Repository (singleton-style, injected downstream) ──
     await init_db()
-    repo = ExtractionRepository(output_dir=args.output or "")
+    repo = ExtractionRepository()
 
     # ── Single file mode ──
     if args.file:

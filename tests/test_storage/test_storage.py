@@ -15,7 +15,6 @@ import pytest
 
 from src.storage.db import get_connection, init_db
 from src.storage.repository import ExtractionRepository
-from src.storage.json_writer import write_json_output
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -46,18 +45,6 @@ async def tmp_db(monkeypatch: pytest.MonkeyPatch) -> AsyncGenerator[str, None]:
     Path(db_path).unlink(missing_ok=True)
     Path(db_path + "-shm").unlink(missing_ok=True)
     Path(db_path + "-wal").unlink(missing_ok=True)
-
-
-@pytest.fixture
-def tmp_output_dir() -> str:
-    """Create a temporary directory for JSON output.
-
-    Uses ``yield`` (not ``return``) so the ``with`` block stays alive
-    for the **entire test** — otherwise ``TemporaryDirectory.__exit__``
-    deletes the directory before any test code touches it.
-    """
-    with tempfile.TemporaryDirectory() as d:
-        yield d
 
 
 @pytest.fixture
@@ -637,88 +624,3 @@ class TestSchemaMigration:
         assert len(rows) == 1
         assert rows[0]["last_error"] == "old error"
         assert rows[0]["failed_stage"] is None  # legacy rows stay NULL
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  JSON writer
-# ═══════════════════════════════════════════════════════════════════
-
-
-class TestJSONWriter:
-    async def test_write_json_output(
-        self, tmp_output_dir: str, passed_extraction_state: dict[str, Any]
-    ) -> None:
-        """JSON writer should create a file on disk."""
-        await write_json_output(passed_extraction_state, tmp_output_dir)
-
-        out_path = Path(tmp_output_dir) / "test_ma_result.json"
-        assert out_path.is_file()
-
-        with open(out_path) as fh:
-            data = json.load(fh)
-        assert data["doc_id"] == "abc123def456"
-        assert data["doc_type"] == "M&A"
-        assert data["validation_passed"] is True
-        assert data["extracted_data"] is not None
-
-    async def test_json_includes_correction_logs(
-        self, tmp_output_dir: str, failed_extraction_state: dict[str, Any]
-    ) -> None:
-        """JSON output should include correction_logs for audit."""
-        await write_json_output(failed_extraction_state, tmp_output_dir)
-
-        out_path = Path(tmp_output_dir) / "test_fail_result.json"
-        assert out_path.is_file()
-
-        with open(out_path) as fh:
-            data = json.load(fh)
-        assert len(data["correction_logs"]) == 3
-        assert data["error"] is not None
-
-    async def test_json_output_unknown_file(
-        self,
-        tmp_output_dir: str,
-    ) -> None:
-        """If file_path is missing, the writer should use 'unknown' as stem."""
-        state = {"file_path": None, "extracted_data": {}, "doc_type": None}
-        await write_json_output(state, tmp_output_dir)
-
-        out_path = Path(tmp_output_dir) / "unknown_result.json"
-        assert out_path.is_file()
-
-
-# ═══════════════════════════════════════════════════════════════════
-#  Repository + JSON dual-write integration
-# ═══════════════════════════════════════════════════════════════════
-
-
-class TestRepositoryDualWrite:
-    async def test_save_with_output_dir_writes_both(
-        self,
-        tmp_db: str,
-        tmp_output_dir: str,
-        passed_extraction_state: dict[str, Any],
-    ) -> None:
-        """save_extraction with output_dir should write JSON + SQLite."""
-        repo = ExtractionRepository(output_dir=tmp_output_dir)
-        await repo.save_extraction(passed_extraction_state)
-
-        # SQLite
-        conn = await get_connection()
-        try:
-            rows = await conn.execute_fetchall("SELECT * FROM extractions")
-            assert len(rows) == 1
-        finally:
-            await conn.close()
-
-        # JSON
-        out_path = Path(tmp_output_dir) / "test_ma_result.json"
-        assert out_path.is_file()
-
-    async def test_empty_output_dir_skips_json(
-        self, tmp_db: str, passed_extraction_state: dict[str, Any]
-    ) -> None:
-        """Empty output_dir should skip JSON write."""
-        repo = ExtractionRepository(output_dir="")
-        await repo.save_extraction(passed_extraction_state)
-        # No error — logically correct
