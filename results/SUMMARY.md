@@ -21,7 +21,7 @@ Every number below comes from a rerunnable script. Raw outputs live under `resul
 | `c554157` … `ef8aad0`, then the `evals/` move | Layered structure, moves only (no behaviour change): prompts in `src/prompts/templates/` (byte-identical, same prompt fingerprint); contracts in `src/schemas/`; routing (`src/workflows/edges.py`) split from wiring (`graph.py`); `validator` renamed `extraction_validator`; evaluation in a top-level `evals/` (datasets, evaluators, `run_golden.py`, `run_e1.py`). Layering rules enforced by `tests/test_workflows/test_layering.py`. |
 | `be01628`, `53fa7e5` | E1 scorer self-checks (gold as output → 100 %, constant `none` → only where `none` is acceptable, API outage → `error`, not wrong). They found that per-label recall counted an accepted `unclear` as a miss; it is now a hand-off counted in `unclear_accepted` (runs 1–2 unchanged). Golden set marked synthetic. |
 
-Unit tests: 216 → 436 (no LLM calls). `black --check` clean. CI on Python 3.11 not yet run for this branch.
+Unit tests: 216 → 440 (no LLM calls; `pytest --collect-only`, 2026-11-12). `black --check` clean. CI on Python 3.11 not yet run for this branch.
 
 ## E1 — classification stage
 
@@ -80,8 +80,9 @@ How to read it:
    environment override.
 2. **Labels.** Blind groups of the E1 dev split still need human labels before accuracy can be
    reported for them. The expanded dataset (dev 100) is not labelled.
-3. **Quote check strictness.** A dropped comma fails the verbatim check (E1-020). Whether
-   punctuation should be ignored when matching is a design decision, not yet made.
+3. **Quote check strictness (decided 2026-11-11: stay strict).** A dropped comma fails the
+   verbatim check (E1-020); in run 2 all 4 such rejections passed on retry. Punctuation is not
+   relaxed.
 4. **Golden gate design.** All checks are pooled, so the one expected_fail case cannot fail the gate on its own (a wrongly stored document still scores 24/26 = 92 % > 85 %). Planned: describe each golden case by its expected outcome (stored / DLQ at stage + code / human review) and gate on outcome separately from field accuracy. Not changed yet.
 5. **Not built:** LLM-as-judge, `mgmt_change` extraction, multi-label routing, extraction-stage
    evaluation (E2), end-to-end funnel (E4), throughput measurement.
