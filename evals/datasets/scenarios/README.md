@@ -19,8 +19,8 @@ written to leave the model no room for doubt, so that the gate does not flip bet
 |---|---|---|---|
 | S1 | `ma_microsoft_activision.txt` | stored, M&A | field extraction, all 8 fields |
 | S2 | `dividend_apple_2026.txt` | stored, Dividend | field extraction, all 9 fields |
-| S3 | `syn_ma_value_undisclosed.txt` | stored, M&A | deal value not disclosed: OPTIONAL field may stay empty (*pending: presence_levels*) |
-| S4 | `syn_dividend_no_exdate.txt` | stored, Dividend | no ex-dividend date: OPTIONAL field may stay empty (*pending: presence_levels*) |
+| S3 | `syn_ma_value_undisclosed.txt` | stored, M&A | deal value not disclosed: OPTIONAL field may stay empty |
+| S4 | `syn_dividend_no_exdate.txt` | stored, Dividend | no ex-dividend date: OPTIONAL field may stay empty |
 | O1 | `test_ma_fail_loop.txt` | out_of_scope | analyst speculation about a possible deal |
 | O2 | `syn_mgmt_change_only.txt` | out_of_scope | officer change only |
 | H1 | `syn_mna_and_dividend.txt` | human_review (classify / ambiguous) | an acquisition and a dividend in one release |
