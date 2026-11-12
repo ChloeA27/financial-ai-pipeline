@@ -21,7 +21,9 @@ Every number below comes from a rerunnable script. Raw outputs live under `resul
 | `c554157` … `ef8aad0`, then the `evals/` move | Layered structure, moves only (no behaviour change): prompts in `src/prompts/templates/` (byte-identical, same prompt fingerprint); contracts in `src/schemas/`; routing (`src/workflows/edges.py`) split from wiring (`graph.py`); `validator` renamed `extraction_validator`; evaluation in a top-level `evals/` (datasets, evaluators, `run_golden.py`, `run_e1.py`). Layering rules enforced by `tests/test_workflows/test_layering.py`. |
 | `be01628`, `53fa7e5` | E1 scorer self-checks (gold as output → 100 %, constant `none` → only where `none` is acceptable, API outage → `error`, not wrong). They found that per-label recall counted an accepted `unclear` as a miss; it is now a hand-off counted in `unclear_accepted` (runs 1–2 unchanged). Golden set marked synthetic. |
 
-Unit tests: 216 → 440 (no LLM calls; `pytest --collect-only`, 2026-11-12). `black --check` clean. CI on Python 3.11 not yet run for this branch.
+Tests: 216 → 440 collected (2026-11-12). 436 run offline with a scripted fake LLM — this is
+what CI runs (`pytest -m "not integration"`). The other 4 are marked `integration` and call the
+real DeepSeek API when a key is set, so a bare `pytest` is not free. `black --check` clean. CI on Python 3.11 not yet run for this branch.
 
 ## E1 — classification stage
 

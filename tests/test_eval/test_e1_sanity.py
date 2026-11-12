@@ -1,5 +1,5 @@
 """
-E1 scorer self-checks (design notes D19, "上线前的自检").
+E1 scorer self-checks (design notes D19, "self-check before online").
 
 The real classification graph runs end to end; only the LLM is replaced by a
 scripted fake. The records then go through the runner's ``_record`` and
