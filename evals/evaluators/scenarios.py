@@ -181,7 +181,7 @@ def compare_field(
 # pipeline implements it; its cases then gate automatically.
 #   presence_levels — OPTIONAL fields may be empty (the validator reads the profile)
 #   retry_policy    — whether to retry depends on the failure category
-IMPLEMENTED_FEATURES: frozenset[str] = frozenset({"retry_policy"})
+IMPLEMENTED_FEATURES: frozenset[str] = frozenset({"retry_policy", "presence_levels"})
 
 # Infrastructure failures say nothing about the pipeline's judgement.
 INCONCLUSIVE_CATEGORIES = frozenset({CAT_TRANSIENT, "config_error"})

@@ -612,3 +612,60 @@ class TestRetryPolicy:
         assert result["failure"]["code"] == "TARGET.NON_EMPTY"
         codes = {e["code"] for e in result["failure"]["details"]["failed_rules"]}
         assert codes == {"TARGET.NON_EMPTY", "TOTAL_VALUE_USD.POSITIVE"}
+
+
+class TestPresenceLevels:
+    """REQUIRED empty fails; any other empty field is allowed (profiles.py)."""
+
+    async def test_undisclosed_deal_value_is_allowed(
+        self, sample_pipeline_state: dict[str, Any]
+    ) -> None:
+        state = dict(sample_pipeline_state)
+        state["extracted_data"] = dict(state["extracted_data"], total_value_usd=None)
+        result = await extraction_validator_node(state)
+        assert result["validation_passed"] is True
+
+    async def test_present_but_invalid_optional_value_still_fails(
+        self, sample_pipeline_state: dict[str, Any]
+    ) -> None:
+        state = dict(sample_pipeline_state)
+        state["extracted_data"] = dict(state["extracted_data"], total_value_usd=0.0)
+        result = await extraction_validator_node(state)
+        assert result["validation_passed"] is False
+
+    async def test_missing_ex_dividend_date_is_allowed(
+        self, dividend_pipeline_state: dict[str, Any]
+    ) -> None:
+        state = dict(dividend_pipeline_state)
+        state["extracted_data"] = dict(state["extracted_data"], ex_dividend_date=None)
+        result = await extraction_validator_node(state)
+        assert result["validation_passed"] is True
+
+    async def test_missing_required_record_date_fails_as_missing_info(
+        self, dividend_pipeline_state: dict[str, Any]
+    ) -> None:
+        state = dict(dividend_pipeline_state)
+        state["extracted_data"] = dict(state["extracted_data"], record_date=None)
+        result = await extraction_validator_node(state)
+        assert result["validation_passed"] is False
+        assert result["failure"]["code"] == "RECORD_DATE.DATE_FORMAT"
+        assert result["failure"]["category"] == "missing_info"
+
+    async def test_missing_expected_field_is_stored_with_a_warning(
+        self, dividend_pipeline_state: dict[str, Any]
+    ) -> None:
+        state = dict(dividend_pipeline_state)
+        state["extracted_data"] = dict(state["extracted_data"], ticker=None)
+        result = await extraction_validator_node(state)
+        assert result["validation_passed"] is True
+        assert result["step_runs"][0]["output"]["expected_missing"] == ["ticker"]
+        assert "ticker" in result["validation_report"]
+
+    @pytest.mark.parametrize("doc_type", ["M&A", "Dividend"])
+    def test_every_required_field_has_a_rule_that_enforces_it(
+        self, doc_type: str
+    ) -> None:
+        from src.nodes.extraction_validator import _PROFILES, _VALIDATION_RULESETS
+
+        ruled = {r["field"] for r in _VALIDATION_RULESETS[doc_type]}
+        assert _PROFILES[doc_type].REQUIRED_FIELDS <= ruled

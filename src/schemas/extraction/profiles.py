@@ -34,7 +34,8 @@ class BaseValidationProfile:
     # EXPECTED  — usually disclosed; a missing value is allowed but flagged.
     # Every other field is OPTIONAL: absent is normal, format is checked only
     # when a value is present.
-    # Contract only for now: the Extraction Validator does not read these yet.
+    # The Extraction Validator reads these: a rule on an empty non-REQUIRED field
+    # is skipped; an empty EXPECTED field is reported as a warning.
     REQUIRED_FIELDS: ClassVar[frozenset[str]] = frozenset()
     EXPECTED_FIELDS: ClassVar[frozenset[str]] = frozenset()
 

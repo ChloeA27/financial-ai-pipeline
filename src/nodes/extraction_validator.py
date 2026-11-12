@@ -35,6 +35,11 @@ from src.schemas.failure import (
     STAGE_VALIDATE,
     make_failure,
 )
+from src.schemas.extraction.profiles import (
+    BaseValidationProfile,
+    DividendValidationProfile,
+    MandaValidationProfile,
+)
 from src.schemas.retry_policy import is_retryable
 from src.schemas.state import PipelineState
 
@@ -389,6 +394,34 @@ _CHECK_DISPATCHER: dict[str, Any] = {
 # ====================================================================
 
 
+# Presence levels per document type (src/schemas/extraction/profiles.py).
+_PROFILES: dict[str, type[BaseValidationProfile]] = {
+    "M&A": MandaValidationProfile,
+    "Dividend": DividendValidationProfile,
+}
+
+
+def _is_empty(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _applies(
+    rule: dict[str, Any], data: dict[str, Any], required: frozenset[str]
+) -> bool:
+    """
+    Presence levels decide whether a single-field rule runs on an empty value.
+
+    REQUIRED field, empty   → the rule runs and fails (missing_info).
+    Any other field, empty  → the rule is skipped: absent is allowed, and the
+                              format is checked only when a value is present.
+    Cross-field rules       → always run (they skip missing dates themselves).
+    """
+    if rule["check"] in _CROSS_FIELD_CHECKS:
+        return True
+    field = rule["field"]
+    return field in required or not _is_empty(data.get(field))
+
+
 def _run_rule(rule: dict[str, Any], data: dict[str, Any]) -> tuple[bool, str]:
     """
     Execute a single validation rule against extracted data.
@@ -578,10 +611,17 @@ async def extraction_validator_node(state: PipelineState) -> dict:
             ],
         }
 
-    # ── Run all validation rules ──
+    # ── Run all validation rules (presence levels decide which apply) ──
+    profile = _PROFILES.get(doc_type, BaseValidationProfile)
+    required = profile.REQUIRED_FIELDS
+    expected_missing = sorted(
+        f for f in profile.EXPECTED_FIELDS if _is_empty(extracted_data.get(f))
+    )
     errors: list[str] = []
     failed_rules: list[dict[str, Any]] = []
     for rule in rules:
+        if not _applies(rule, extracted_data, required):
+            continue
         passed, err_msg = _run_rule(rule, extracted_data)
         if not passed:
             errors.append(err_msg)
@@ -590,6 +630,11 @@ async def extraction_validator_node(state: PipelineState) -> dict:
     # ── Assemble report ──
     if not errors:
         report = "All validation checks passed."
+        if expected_missing:
+            # EXPECTED but absent: stored with a warning (counted, not blocked).
+            report += (
+                f" Warning: EXPECTED fields missing: {', '.join(expected_missing)}."
+            )
         new_validation_passed = True
     else:
         report = "Validation FAILED:\n" + "\n".join(f"  - {e}" for e in errors)
@@ -607,7 +652,11 @@ async def extraction_validator_node(state: PipelineState) -> dict:
                 state,
                 attempt,
                 OUTCOME_PASSED,
-                output={"report": report, "rules_checked": len(rules)},
+                output={
+                    "report": report,
+                    "rules_checked": len(rules),
+                    "expected_missing": expected_missing,
+                },
             )
         ]
 
