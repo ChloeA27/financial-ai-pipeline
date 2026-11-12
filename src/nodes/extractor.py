@@ -29,6 +29,7 @@ from pydantic import ValidationError
 
 from src.config import settings
 from src.llm.client import LLMCallInfo, LLMClient
+from src.llm.errors import classify_llm_exception
 from src.prompts import load_prompt
 from src.rag.retriever import retrieve_context
 from src.schemas.base import Metadata
@@ -46,9 +47,7 @@ from src.schemas.failure import (
     CAT_INPUT_ERROR,
     CAT_OUT_OF_SCOPE,
     CAT_STRUCTURE,
-    CAT_TRANSIENT,
     EMPTY_DOCUMENT,
-    LLM_CALL_FAILED,
     MISSING_DOC_TYPE,
     SCHEMA_PARSE_FAILED,
     STAGE_EXTRACT,
@@ -242,11 +241,12 @@ async def extractor_node(state: PipelineState) -> dict:
         # the self-correction loop is for, so don't abort — log and retry.
         return _parse_failure_update(state, exc, attempt, client.last_call)
     except Exception as exc:
+        code, category = classify_llm_exception(exc)
         return _fatal(
             state,
             attempt,
-            LLM_CALL_FAILED,
-            CAT_TRANSIENT,
+            code,
+            category,
             f"extractor_node: LLM call failed — {exc}",
             llm_call=client.last_call,
         )

@@ -24,7 +24,8 @@ class TestValidatorFailureAttribution:
     async def test_mid_loop_failure_has_no_failure_record(
         self, sample_pipeline_state: dict[str, Any]
     ) -> None:
-        sample_pipeline_state["extracted_data"]["target"] = ""
+        # a retryable failure (value present but invalid) is mid-loop
+        sample_pipeline_state["extracted_data"]["total_value_usd"] = 0.0
         update = await extraction_validator_node(sample_pipeline_state)
         assert update["validation_passed"] is False
         assert "failure" not in update  # only terminal exits carry one

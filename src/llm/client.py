@@ -47,9 +47,13 @@ class LLMClient:
     """Thin async wrapper around DeepSeek (OpenAI-compatible) API."""
 
     def __init__(self) -> None:
+        # Transient failures (connection, timeout, 429, 5xx) are retried here by
+        # the SDK with exponential backoff, never by the self-correction loops.
         self._client = AsyncOpenAI(
             api_key=settings.deepseek_api_key,
             base_url=settings.deepseek_base_url,
+            max_retries=settings.llm_max_retries,
+            timeout=settings.llm_timeout_seconds,
         )
         self._model = settings.deepseek_model
         self.last_call: Optional[LLMCallInfo] = None

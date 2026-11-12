@@ -29,12 +29,13 @@ from src.nodes.step_runs import (
 from src.schemas.failure import (
     CAT_BUSINESS_RULE,
     CAT_MISSING_INFO,
+    CAT_INTERNAL_ERROR,
     CAT_STRUCTURE,
-    CAT_UNKNOWN,
     NO_EXTRACTED_DATA,
     STAGE_VALIDATE,
     make_failure,
 )
+from src.schemas.retry_policy import is_retryable
 from src.schemas.state import PipelineState
 
 
@@ -500,6 +501,8 @@ def _describe_failures(
     Primary (code, category) plus a record of every failed rule.
 
     The primary failure is the most severe one (ties: first in rule order).
+    When any failed rule may not be retried (retry policy), the primary is the
+    most severe of those, because it decides that the loop stops.
     """
     entries = [
         {
@@ -509,7 +512,10 @@ def _describe_failures(
         }
         for rule in failed_rules
     ]
-    primary = min(entries, key=lambda e: _SEVERITY_ORDER.get(e["severity"], 99))
+    stopping = [e for e in entries if not is_retryable(e["category"])]
+    primary = min(
+        stopping or entries, key=lambda e: _SEVERITY_ORDER.get(e["severity"], 99)
+    )
     return primary["code"], primary["category"], entries
 
 
@@ -542,7 +548,10 @@ async def extraction_validator_node(state: PipelineState) -> dict:
     extracted_data: dict[str, Any] | None = state.get("extracted_data")
     if not extracted_data:
         message = "extraction_validator_node: no extracted_data found in state."
-        failure = make_failure(STAGE_VALIDATE, NO_EXTRACTED_DATA, CAT_UNKNOWN, message)
+        # Unreachable in a correct graph: the Extractor always sets data or error.
+        failure = make_failure(
+            STAGE_VALIDATE, NO_EXTRACTED_DATA, CAT_INTERNAL_ERROR, message
+        )
         return {
             "validation_passed": False,
             "validation_report": message,
@@ -605,11 +614,18 @@ async def extraction_validator_node(state: PipelineState) -> dict:
     if not new_validation_passed:
         # ── Self-correction: log the failure, spend one retry (or give up) ──
         max_retries = state.get("max_retries", 3)
-        exhausted = (
-            f"extraction_validator_node: max retries ({max_retries}) exhausted. "
-            f"Document failed all correction cycles."
-        )
         code, category, entries = _describe_failures(failed_rules, extracted_data)
+        retryable = is_retryable(category)
+        if retryable:
+            exhausted = (
+                f"extraction_validator_node: max retries ({max_retries}) exhausted. "
+                f"Document failed all correction cycles."
+            )
+        else:
+            exhausted = (
+                f"extraction_validator_node: {category} is not retried ({code}); "
+                f"a person must review the document."
+            )
         updates.update(
             register_failure(
                 state,
@@ -623,6 +639,7 @@ async def extraction_validator_node(state: PipelineState) -> dict:
                     exhausted,
                     details={"failed_rules": entries},
                 ),
+                retryable=retryable,
             )
         )
         updates["step_runs"] = [

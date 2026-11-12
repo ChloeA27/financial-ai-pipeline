@@ -181,7 +181,7 @@ def compare_field(
 # pipeline implements it; its cases then gate automatically.
 #   presence_levels — OPTIONAL fields may be empty (the validator reads the profile)
 #   retry_policy    — whether to retry depends on the failure category
-IMPLEMENTED_FEATURES: frozenset[str] = frozenset()
+IMPLEMENTED_FEATURES: frozenset[str] = frozenset({"retry_policy"})
 
 # Infrastructure failures say nothing about the pipeline's judgement.
 INCONCLUSIVE_CATEGORIES = frozenset({CAT_TRANSIENT, "config_error"})
@@ -261,6 +261,12 @@ def score_case(case: ScenarioCase, state: dict) -> dict:
     checks = [_check("outcome", exp["outcome"], actual_outcome)]
     if "doc_type" in exp:
         checks.append(_check("doc_type", exp["doc_type"], state.get("doc_type")))
+    if "extract_attempts" in exp:
+        # How many times the Extractor ran: checks the retry policy end to end.
+        attempts = sum(
+            1 for s in state.get("step_runs") or [] if s.get("stage") == "extract"
+        )
+        checks.append(_check("extract_attempts", exp["extract_attempts"], attempts))
     for key in ("stage", "category", "code"):
         if key in (exp.get("failure") or {}):
             checks.append(

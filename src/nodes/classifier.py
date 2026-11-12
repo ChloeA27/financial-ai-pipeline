@@ -27,6 +27,7 @@ from pydantic import ValidationError
 
 from src.config import settings
 from src.llm.client import LLMCallInfo, LLMClient
+from src.llm.errors import classify_llm_exception
 from src.nodes.input_window import build_input
 from src.nodes.step_runs import (
     OUTCOME_FATAL,
@@ -45,10 +46,8 @@ from src.nodes.retry import (
 from src.schemas.failure import (
     CAT_INPUT_ERROR,
     CAT_STRUCTURE,
-    CAT_TRANSIENT,
     CLASSIFICATION_PARSE_FAILED,
     EMPTY_DOCUMENT,
-    LLM_CALL_FAILED,
     STAGE_CLASSIFY,
     make_failure,
 )
@@ -132,7 +131,8 @@ async def classifier_node(state: PipelineState) -> dict:
         return update
     except Exception as exc:
         message = f"classifier_node: LLM call failed — {exc}"
-        failure = make_failure(STAGE_CLASSIFY, LLM_CALL_FAILED, CAT_TRANSIENT, message)
+        code, category = classify_llm_exception(exc)
+        failure = make_failure(STAGE_CLASSIFY, code, category, message)
         return {
             "error": message,
             "failure": failure,

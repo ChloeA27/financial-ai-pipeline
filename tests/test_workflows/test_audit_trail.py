@@ -35,6 +35,8 @@ GOOD = (
 )
 BAD_ENUM = '{"acquirer": "Acme", "target": "W", "payment_method": "cash"}'
 NO_ACQUIRER = '{"target": "W", "total_value_usd": 5, "payment_method": "Cash"}'
+# passes the schema, fails the validator with a value present: retryable
+ZERO_VALUE = '{"acquirer": "Acme", "target": "W", "total_value_usd": 0, "payment_method": "Cash"}'
 
 
 @pytest.fixture
@@ -82,7 +84,7 @@ async def _rows(sql: str, *args: Any) -> list[Any]:
 class TestStepRunsInState:
     async def test_every_attempt_of_both_loops_is_recorded(self, scripted) -> None:
         fake, path = scripted
-        fake.queue = [BAD_QUOTE, CLASSIFY, BAD_ENUM, NO_ACQUIRER, GOOD]
+        fake.queue = [BAD_QUOTE, CLASSIFY, BAD_ENUM, ZERO_VALUE, GOOD]
 
         result = await run_pipeline(path)
 
@@ -94,7 +96,7 @@ class TestStepRunsInState:
             ("classify_validate", 2, "passed", None),
             ("extract", 1, "rejected", "SCHEMA_PARSE_FAILED"),
             ("extract", 2, "passed", None),
-            ("validate", 2, "rejected", "ACQUIRER.NON_EMPTY"),
+            ("validate", 2, "rejected", "TOTAL_VALUE_USD.POSITIVE"),
             ("extract", 3, "passed", None),
             ("validate", 3, "passed", None),
         ]
@@ -176,7 +178,7 @@ class TestPersistedAuditTrail:
         self, scripted, tmp_db: str
     ) -> None:
         fake, path = scripted
-        fake.queue = [CLASSIFY] + [NO_ACQUIRER] * 4
+        fake.queue = [CLASSIFY] + [ZERO_VALUE] * 4
 
         state = await run_pipeline(path)
         await ExtractionRepository().save_extraction(state)

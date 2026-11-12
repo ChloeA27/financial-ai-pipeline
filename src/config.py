@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     classify_thinking: str = "disabled"
     classify_max_tokens: int = 1024
 
+    # ── LLM transport (retries of transient failures: timeout, 429, 5xx) ──
+    # Handled by the OpenAI SDK with exponential backoff; separate from the
+    # self-correction budgets below, which are about the model's answers.
+    llm_max_retries: int = 2
+    llm_timeout_seconds: float = 60.0
+
     # ── Pipeline ──
     max_retries: int = 3  # extraction self-correction budget
     classify_max_retries: int = 2  # classification self-correction budget

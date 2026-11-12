@@ -243,6 +243,12 @@ class TestGraphSelfCorrection:
         ' "payment_method": "Cash"}'
     )
     BAD_ENUM = '{"acquirer": "Acme", "target": "W", "payment_method": "cash"}'
+    # passes the schema, fails the validator with a value present: retryable
+    ZERO_VALUE = (
+        '{"acquirer": "Acme", "target": "W", "total_value_usd": 0,'
+        ' "payment_method": "Cash"}'
+    )
+    NO_ACQUIRER = '{"target": "W", "total_value_usd": 5, "payment_method": "Cash"}'
 
     async def test_bad_enum_then_good_recovers(self, scripted) -> None:
         fake, path = scripted
@@ -274,8 +280,7 @@ class TestGraphSelfCorrection:
         self, scripted
     ) -> None:
         fake, path = scripted
-        no_acquirer = '{"target": "W", "total_value_usd": 5, "payment_method": "Cash"}'
-        fake.queue = [self.CLASSIFY, self.BAD_ENUM, no_acquirer, self.GOOD]
+        fake.queue = [self.CLASSIFY, self.BAD_ENUM, self.ZERO_VALUE, self.GOOD]
 
         result = await run_pipeline(path)
 
@@ -298,10 +303,9 @@ class TestGraphSelfCorrection:
         assert fake.queue == [self.GOOD]
 
     async def test_validator_failures_get_full_budget(self, scripted) -> None:
-        """Rule failures (not just parse failures) also get max_retries retries."""
+        """Retryable rule failures (not just parse failures) get max_retries retries."""
         fake, path = scripted
-        no_acquirer = '{"target": "W", "total_value_usd": 5, "payment_method": "Cash"}'
-        fake.queue = [self.CLASSIFY] + [no_acquirer] * 4
+        fake.queue = [self.CLASSIFY] + [self.ZERO_VALUE] * 4
 
         result = await run_pipeline(path)
 
@@ -310,6 +314,21 @@ class TestGraphSelfCorrection:
         assert len(result["correction_logs"]) == 4
         assert "extraction_validator_node: max retries (3) exhausted" in result["error"]
         assert fake.queue == []
+
+    async def test_missing_required_field_stops_after_one_extraction(
+        self, scripted
+    ) -> None:
+        """Retry policy: feedback on a missing field would push the model to fill it."""
+        fake, path = scripted
+        fake.queue = [self.CLASSIFY, self.NO_ACQUIRER, self.GOOD]  # GOOD never used
+
+        result = await run_pipeline(path)
+
+        assert result["validation_passed"] is False
+        assert result["retry_count"] == 0
+        assert result["failure"]["category"] == "missing_info"
+        assert "not retried" in result["error"]
+        assert fake.queue == [self.GOOD]
 
     # ── classify loop ──
 

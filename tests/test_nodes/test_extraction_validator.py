@@ -407,13 +407,15 @@ class TestValidatorNode:
     async def test_manda_fails_on_empty_acquirer(
         self, sample_pipeline_state: dict[str, Any]
     ) -> None:
-        """Missing acquirer should trigger CRITICAL failure."""
+        """Missing acquirer: CRITICAL missing_info, never retried (retry policy)."""
         state = dict(sample_pipeline_state)
         state["extracted_data"] = dict(state["extracted_data"])
         state["extracted_data"]["acquirer"] = ""
         result = await extraction_validator_node(state)
         assert result.get("validation_passed") is False
-        assert result.get("retry_count") == 1
+        assert result.get("retry_count") == 0  # budget left, but no retry
+        assert result["failure"]["category"] == "missing_info"
+        assert "not retried" in result["error"]
         logs = result.get("correction_logs", [])
         assert len(logs) == 1
         assert "acquirer" in logs[0]["error_summary"].lower()
@@ -522,7 +524,7 @@ class TestValidatorNode:
         """After max retries, validator should set error for DLQ routing."""
         state = dict(sample_pipeline_state)
         state["extracted_data"] = dict(state["extracted_data"])
-        state["extracted_data"]["acquirer"] = ""
+        state["extracted_data"]["total_value_usd"] = 0.0  # present but invalid
         state["retry_count"] = 3  # all 3 allowed retries already performed
         state["max_retries"] = 3
         result = await extraction_validator_node(state)
@@ -539,7 +541,7 @@ class TestValidatorNode:
         """retry_count == max-1 failing again still earns the final retry."""
         state = dict(sample_pipeline_state)
         state["extracted_data"] = dict(state["extracted_data"])
-        state["extracted_data"]["acquirer"] = ""
+        state["extracted_data"]["total_value_usd"] = 0.0  # retryable structure
         state["retry_count"] = 2
         state["max_retries"] = 3
         result = await extraction_validator_node(state)
@@ -572,3 +574,41 @@ class TestValidatorNode:
         state["error"] = "Previous node failed"
         result = await extraction_validator_node(state)
         assert result == {}  # No-op
+
+
+class TestRetryPolicy:
+    """missing_info and business_rule stop the loop at once (src/schemas/retry_policy.py)."""
+
+    async def test_present_but_invalid_value_is_retried(
+        self, sample_pipeline_state: dict[str, Any]
+    ) -> None:
+        state = dict(sample_pipeline_state)
+        state["extracted_data"] = dict(state["extracted_data"], total_value_usd=0.0)
+        result = await extraction_validator_node(state)
+        assert result["retry_count"] == 1 and result.get("error") is None
+
+    async def test_business_rule_is_not_retried(
+        self, sample_pipeline_state: dict[str, Any]
+    ) -> None:
+        state = dict(sample_pipeline_state)
+        state["extracted_data"] = dict(
+            state["extracted_data"], acquirer="Company A", target="Company A"
+        )
+        result = await extraction_validator_node(state)
+        assert result["retry_count"] == 0
+        assert result["failure"]["category"] == "business_rule"
+        assert result["failure"]["code"] == "NOT_EQUAL"
+
+    async def test_a_non_retryable_failure_wins_over_a_retryable_one(
+        self, sample_pipeline_state: dict[str, Any]
+    ) -> None:
+        """total_value_usd=0 alone would be retried; a missing target stops the loop."""
+        state = dict(sample_pipeline_state)
+        state["extracted_data"] = dict(
+            state["extracted_data"], total_value_usd=0.0, target=None
+        )
+        result = await extraction_validator_node(state)
+        assert result["retry_count"] == 0
+        assert result["failure"]["code"] == "TARGET.NON_EMPTY"
+        codes = {e["code"] for e in result["failure"]["details"]["failed_rules"]}
+        assert codes == {"TARGET.NON_EMPTY", "TOTAL_VALUE_USD.POSITIVE"}

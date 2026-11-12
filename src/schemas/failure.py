@@ -16,13 +16,15 @@ Categories (what kind of problem, loosely following the error taxonomy in the
 design notes)::
 
     transient     infrastructure / LLM transport problem — says nothing about quality
+    config_error  the LLM provider refused our credentials, model or endpoint (401/403/404)
     structure     output has the wrong shape (bad JSON, bad enum, bad date format)
     reference     output cites evidence that is not in the source text
     missing_info  a required value is absent
     business_rule a cross-field business rule is violated
     out_of_scope  the document is not a type this pipeline handles (expected, not an error)
     ambiguous     the classifier could not decide (needs a human)
-    input_error   the input itself is unusable (missing file, empty text)
+    input_error   the input itself is unusable (missing file, empty text, request rejected as invalid)
+    internal_error a state the graph should never reach — a pipeline bug
     unknown       anything not yet classified
 """
 
@@ -42,6 +44,7 @@ STAGE_PIPELINE = "pipeline"
 
 # ── Categories ──
 CAT_TRANSIENT = "transient"
+CAT_CONFIG_ERROR = "config_error"
 CAT_STRUCTURE = "structure"
 CAT_REFERENCE = "reference"
 CAT_MISSING_INFO = "missing_info"
@@ -49,10 +52,13 @@ CAT_BUSINESS_RULE = "business_rule"
 CAT_OUT_OF_SCOPE = "out_of_scope"
 CAT_AMBIGUOUS = "ambiguous"
 CAT_INPUT_ERROR = "input_error"
+CAT_INTERNAL_ERROR = "internal_error"
 CAT_UNKNOWN = "unknown"
 
 # ── Codes that are not derived from a validation rule ──
 LLM_CALL_FAILED = "LLM_CALL_FAILED"
+LLM_CONFIG_ERROR = "LLM_CONFIG_ERROR"
+LLM_REQUEST_REJECTED = "LLM_REQUEST_REJECTED"
 FILE_NOT_FOUND = "FILE_NOT_FOUND"
 DECODE_FAILED = "DECODE_FAILED"
 NO_FILE_PATH = "NO_FILE_PATH"

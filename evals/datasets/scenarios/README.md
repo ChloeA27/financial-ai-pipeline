@@ -24,8 +24,8 @@ written to leave the model no room for doubt, so that the gate does not flip bet
 | O1 | `test_ma_fail_loop.txt` | out_of_scope | analyst speculation about a possible deal |
 | O2 | `syn_mgmt_change_only.txt` | out_of_scope | officer change only |
 | H1 | `syn_mna_and_dividend.txt` | human_review (classify / ambiguous) | an acquisition and a dividend in one release |
-| H2 | `syn_ma_unnamed_target.txt` | human_review (validate / missing_info, `TARGET.NON_EMPTY`) | the target is not named; it must not be filled with a description |
-| H3 | `syn_dividend_bad_timeline.txt` | human_review (validate / business_rule) | record and ex-dividend dates fall before the declaration |
+| H2 | `syn_ma_unnamed_target.txt` | human_review (validate / missing_info, `TARGET.NON_EMPTY`), 1 extraction | the target is not named; it must not be filled with a description, and there is no retry |
+| H3 | `syn_dividend_bad_timeline.txt` | human_review (validate / business_rule), 1 extraction | record and ex-dividend dates fall before the declaration; no retry |
 | D1 | `syn_binary_as_txt.txt` | dlq (read / input_error, `DECODE_FAILED`) | binary content stops at read, with no LLM call |
 
 `test_ma_pass.txt` stays in `inputs/` because integration tests use it. It is not a scenario

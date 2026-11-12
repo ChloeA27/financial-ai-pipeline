@@ -194,3 +194,21 @@ class TestOverridesAndDiagnostics:
     def test_stored_fields_are_not_repeated_for_correct_stores(self) -> None:
         case = _case({"outcome": "stored", "doc_type": "M&A", "fields": MA})
         assert score_case(case, _stored(MA))["stored_fields"] is None
+
+
+class TestRetryCheck:
+    def test_extract_attempts_counts_extractor_steps(self) -> None:
+        case = _case({"outcome": "human_review", "extract_attempts": 1})
+        state = _failed("validate", "missing_info") | {
+            "step_runs": [
+                {"stage": "classify"},
+                {"stage": "extract"},
+                {"stage": "validate"},
+                {"stage": "extract"},
+            ]
+        }
+        r = score_case(case, state)
+        assert r["status"] == "fail"
+        assert [c for c in r["checks"] if c["check"] == "extract_attempts"][0][
+            "actual"
+        ] == 2
