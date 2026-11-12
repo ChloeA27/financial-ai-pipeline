@@ -43,7 +43,7 @@ PROJECTION_RULE = (
     "gold ∩ {mna, dividend}; empty → none (mgmt_change-only filings count as none); "
     "mna+dividend accepts 'unclear' (single-label classifier)"
 )
-ERROR_CATEGORIES = {"transient", "input_error"}
+ERROR_CATEGORIES = {"transient", "input_error", "config_error"}
 
 
 # ── Dataset ──────────────────────────────────────────────────────────

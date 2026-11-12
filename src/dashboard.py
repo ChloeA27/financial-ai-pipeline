@@ -9,6 +9,7 @@ Reads data/pipeline.db in real-time and displays:
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -19,7 +20,12 @@ import streamlit as st
 # ──────────────────────────────────────────────
 #  Constants
 # ──────────────────────────────────────────────
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "pipeline.db"
+# PIPELINE_DB points the page at another database, e.g. an E4 run's run.db.
+DB_PATH = Path(
+    os.environ.get(
+        "PIPELINE_DB", Path(__file__).resolve().parent.parent / "data" / "pipeline.db"
+    )
+)
 
 
 # ──────────────────────────────────────────────

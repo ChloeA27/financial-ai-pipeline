@@ -37,3 +37,4 @@ htmlcov/
 results/**/run.db*
 results/**/raw/
 results/**/chroma/
+results/**/_local/
