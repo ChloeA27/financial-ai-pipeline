@@ -1,0 +1,105 @@
+{
+  "gate_passed": true,
+  "cases": 10,
+  "gating_cases": 10,
+  "outcome_correct": 10,
+  "outcome_scored": 10,
+  "failed": [],
+  "inconclusive": [],
+  "false_accepts": [],
+  "pending": {},
+  "pending_now_passing": [],
+  "confusion": [
+    {
+      "expected": "dlq",
+      "actual": "dlq",
+      "count": 1
+    },
+    {
+      "expected": "human_review",
+      "actual": "human_review",
+      "count": 3
+    },
+    {
+      "expected": "out_of_scope",
+      "actual": "out_of_scope",
+      "count": 2
+    },
+    {
+      "expected": "stored",
+      "actual": "stored",
+      "count": 4
+    }
+  ],
+  "field_accuracy": {
+    "acquirer": {
+      "passed": 2,
+      "total": 2
+    },
+    "target": {
+      "passed": 2,
+      "total": 2
+    },
+    "total_value_usd": {
+      "passed": 2,
+      "total": 2
+    },
+    "stake_percentage": {
+      "passed": 2,
+      "total": 2
+    },
+    "requires_shareholder_approval": {
+      "passed": 2,
+      "total": 2
+    },
+    "payment_method": {
+      "passed": 2,
+      "total": 2
+    },
+    "announcement_date": {
+      "passed": 2,
+      "total": 2
+    },
+    "expected_close_date": {
+      "passed": 1,
+      "total": 1
+    },
+    "ticker": {
+      "passed": 2,
+      "total": 2
+    },
+    "declaration_date": {
+      "passed": 2,
+      "total": 2
+    },
+    "dividend_cash_amount": {
+      "passed": 2,
+      "total": 2
+    },
+    "currency": {
+      "passed": 2,
+      "total": 2
+    },
+    "record_date": {
+      "passed": 2,
+      "total": 2
+    },
+    "ex_dividend_date": {
+      "passed": 2,
+      "total": 2
+    },
+    "payment_date": {
+      "passed": 2,
+      "total": 2
+    },
+    "dividend_type": {
+      "passed": 2,
+      "total": 2
+    },
+    "frequency": {
+      "passed": 2,
+      "total": 2
+    }
+  },
+  "field_warnings": {}
+}

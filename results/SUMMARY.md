@@ -1,8 +1,9 @@
-# Project summary — state as of 2026-11-11
+# Project summary — state as of 2026-11-12
 
-Branch `feat/classification-validation-and-dlq-stages` (not yet merged to `main`).
-Every number below comes from a rerunnable script. Raw outputs live under `results/e1/`
-(index: `results/e1/README.md`).
+Branches: `feat/classification-validation-and-dlq-stages` (work up to 2026-11-11), then
+`feat/outcome-routing` (2026-11-12, not merged). Every number below comes from a rerunnable
+script. Raw outputs live under `results/` (indexes: `results/e1/README.md`,
+`results/e4/README.md`, `results/scenarios/README.md`).
 
 ## What changed
 
@@ -21,9 +22,32 @@ Every number below comes from a rerunnable script. Raw outputs live under `resul
 | `c554157` … `ef8aad0`, then the `evals/` move | Layered structure, moves only (no behaviour change): prompts in `src/prompts/templates/` (byte-identical, same prompt fingerprint); contracts in `src/schemas/`; routing (`src/workflows/edges.py`) split from wiring (`graph.py`); `validator` renamed `extraction_validator`; evaluation in a top-level `evals/` (datasets, evaluators, `run_golden.py`, `run_e1.py`). Layering rules enforced by `tests/test_workflows/test_layering.py`. |
 | `be01628`, `53fa7e5` | E1 scorer self-checks (gold as output → 100 %, constant `none` → only where `none` is acceptable, API outage → `error`, not wrong). They found that per-label recall counted an accepted `unclear` as a miss; it is now a hand-off counted in `unclear_accepted` (runs 1–2 unchanged). Golden set marked synthetic. |
 
-Tests: 216 → 435 collected (2026-11-12). 431 run offline with a scripted fake LLM — this is
+Tests: 216 → 479 collected (2026-11-12, end of day). 475 run offline with a scripted fake LLM — this is
 what CI runs (`pytest -m "not integration"`). The other 4 are marked `integration` and call the
 real DeepSeek API when a key is set, so a bare `pytest` is not free. `black --check` clean. CI on Python 3.11 not yet run for this branch.
+
+## 2026-11-12 — outcome routing, retry policy, presence levels, end-to-end runs
+
+| Commit | Change |
+|---|---|
+| `96fb579` | `outcome_of`: one rule maps every run to stored / out_of_scope / human_review / dlq, from `failure.category` only |
+| `43fd546`, `44134e5` | Golden set redesigned as the **scenario gate**: 10 synthetic cases, one or two per path, an outcome gate and a REQUIRED-field gate, never pooled |
+| `b75864b` | **Retry policy by category**: `missing_info` and `business_rule` are never retried. SDK retries transient failures (2, 60 s timeout). 401/403/404 are `config_error` |
+| `ad6db06`, `09e82d7` | **Presence levels** (REQUIRED / EXPECTED / OPTIONAL) declared in the profiles and read by the validator |
+| `cc92cd9` | E4 runner (whole pipeline on the E1 dev split), E2 design (`evals/E2_DESIGN.md`), `make dash` |
+
+Each fix came from a measurement:
+
+| Measurement | Before | After |
+|---|---|---|
+| Scenario gate, H2 (target not named) | stored a made-up `target` after one feedback retry (false accept) | human review, one extraction |
+| Scenario gate | FAIL, 26 LLM calls | PASS 10/10, 15 LLM calls |
+| E4 dev (n=100, `deepseek-flash`): supported filings stored | 2 of 42 (36 reviews from empty `total_value_usd` / `ex_dividend_date`) | **35 of 42** |
+| Field mention in real filings (no LLM) | ex-dividend date in 1 of 20 dividend filings | made it OPTIONAL |
+
+E4 classification: 17/17 on human-verified labels; 86.8 % agreement with silver (draft)
+labels. **Stored does not mean correct:** field values are unscored until E2 has field gold.
+3 silver-`none` filings were stored as M&A and need a human check.
 
 ## E1 — classification stage
 
@@ -85,8 +109,12 @@ How to read it:
 3. **Quote check strictness (decided 2026-11-11: stay strict).** A dropped comma fails the
    verbatim check (E1-020); in run 2 all 4 such rejections passed on retry. Punctuation is not
    relaxed.
-4. **Golden gate design, redesigned 2026-11-12 on branch `feat/outcome-routing` (not merged).** The old gate pooled all checks, so the one expected_fail case could not fail it on its own (a wrongly stored document still scored 24/26 = 92 % > 85 %). It is now the *scenario gate* (`evals/run_scenarios.py`): 10 synthetic cases, one or two per path, each with an expected outcome (stored / out_of_scope / human_review / dlq). The outcome gate and the REQUIRED-field gate are separate. Not yet run with the real model.
+4. **Golden gate design: done 2026-11-12 (scenario gate, see above).** The old gate pooled all checks, so the one expected_fail case could not fail it on its own (a wrongly stored document still scored 24/26 = 92 % > 85 %). It is now the *scenario gate* (`evals/run_scenarios.py`): 10 synthetic cases, one or two per path, each with an expected outcome (stored / out_of_scope / human_review / dlq). The outcome gate and the REQUIRED-field gate are separate. Run with the real model three times (`results/scenarios/`).
 5. **Not built:** LLM-as-judge, `mgmt_change` extraction, multi-label routing, extraction-stage
-   evaluation (E2), end-to-end funnel (E4), throughput measurement.
+   evaluation (E2: designed, no field gold yet), throughput measurement, the `review_queue`
+   table (human review is still a DLQ row with an `ambiguous` / `missing_info` /
+   `business_rule` category). The Extractor reads only the first 6,000 characters.
+7. **Labels.** The outsourced E1 re-labelling matches Claude's drafts on 96/96 unverified
+   cases and is not independent. Use it as silver only.
 6. **Not verified:** dashboard layout by eye (rendered headlessly with Streamlit `AppTest` only);
    Python 3.11.
