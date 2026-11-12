@@ -1,0 +1,16 @@
+{
+  "created_at_utc": "20261112-213217",
+  "model": "deepseek-chat",
+  "implemented_features": [
+    "retry_policy"
+  ],
+  "git": {
+    "commit": "b75864b7c18180c731ae9ffe9038c7d7b3ad33ee",
+    "dirty": false
+  },
+  "tokens": {
+    "llm_calls": 15,
+    "prompt_tokens": 13378,
+    "completion_tokens": 1044
+  }
+}
