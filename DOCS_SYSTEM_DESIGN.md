@@ -1,6 +1,6 @@
 # Financial AI Pipeline — System Design White Paper
 
-> **Document Version:** 1.0.0  
+> **Document Version:** 1.1.0 (updated 2026-11-12: four outcomes, retry policy, field presence levels, human review queue)  
 > **Status:** Active — ratified  
 > **Audience:** Senior AI Data Engineer (interview showcase), Platform Architects, Data Consumers  
 > **Repository:** `financial-ai-pipeline`
@@ -49,13 +49,13 @@ Traditional approaches (regex scraping, template-based parsers) fail because:
 |------|-------------|-------------|
 | **G1 — Structured Extraction** | Convert raw `.txt` announcements into strictly-typed JSON with validated business fields. | Pydantic model parse success rate; validation pass rate |
 | **G2 — Full Traceability** | Every output asset carries immutable provenance: source file path, LLM model, pipeline version, timestamp, retry history. | Presence of `Metadata` on every `BaseDoc` subtype |
-| **G3 — Self-Correction** | Failed validation triggers an automatic retry with structured error feedback sent back to the LLM. Documents that exhaust all retries go to a Dead Letter Queue without corrupting core assets. | Conditional edge routing in LangGraph; DLQ isolation |
+| **G3 — Self-Correction** | A failure that another attempt can fix (bad format, a quote not found) triggers a retry with structured error feedback. A missing required value or a broken business rule is never retried (feedback would push the model to invent a value). Nothing that failed reaches the core assets: it goes to human review or the Dead Letter Queue. | Conditional edge routing in LangGraph; retry policy by failure category; scenario gate |
 | **G4 — Idempotent Re-Run** | Running the pipeline twice on the same (unchanged) file produces exactly one database row — no duplicates, no side effects. | SHA-256 hash collision check; zero rows added on repeat run |
 | **G5 — Versioned History** | When a source file is amended and re-processed, the old extraction is archived (`is_current=0`) and a new version is created — never overwritten. | SCD Type 2 `version` + `is_current` columns |
 | **G6 — Zero-Code Extension** | Adding a new document type requires schema definition only — no changes to graph topology, node logic, or persistence code. | Registry Pattern: `EXTRACTOR_MODELS`, `EXTRACTOR_RESULT_MODELS`, `EXTRACTOR_PROMPTS` |
 | **G7 — Async Concurrency** | Batch-processing N documents must not degrade to serial execution; each file runs its own independent LangGraph state machine. | `asyncio.Semaphore` + `asyncio.gather`; wall-clock time < N × single-file time |
-| **G8 — Operation Visibility** | Streamlit dashboard exposes KPI cards, error panels, and audit-trail drill-downs querying the live database. | Dashboard visible at `http://localhost:8501` |
-| **G9 — RAG-Augmented Extraction** | Historical validated extractions are embedded and stored in ChromaDB (per doc-type collection). On first-pass extraction, semantically similar past results are retrieved as few-shot context to improve LLM accuracy. | ChromaDB collection row count; retrieval relevance |
+| **G8 — Operation Visibility** | One Streamlit app (`make dash`) with pages for the pipeline database (four outcomes, the human review queue, the DLQ, audit-trail drill-downs) and for E1 / E4 evaluation runs. | Dashboard visible at `http://localhost:8501` |
+| **G9 — RAG-Augmented Extraction (optional, off by default; effect not measured)** | Historical validated extractions are embedded and stored in ChromaDB (per doc-type collection). On first-pass extraction, semantically similar past results are retrieved as few-shot context to improve LLM accuracy. | ChromaDB collection row count; retrieval relevance |
 | **G10 — CI Scenario Gate** | Every push/PR must pass the scenario gate: each case must reach its expected outcome (stored / out of scope / human review / DLQ), and stored cases must match on every REQUIRED field. Pipeline regressions fail the build before deployment. | GitHub Actions CI; `evals/run_scenarios.py` exit code check |
 
 ### 1.3 Non-Goals
@@ -78,8 +78,8 @@ Traditional approaches (regex scraping, template-based parsers) fail because:
                    │          BOUNDARY OF THIS PIPELINE        │
                    │                                          │
  source *.txt   ──►│  Reader → Classifier → Class.Val. →      │──► extractions (SCD2)
-                   │  Extractor → Validator  ↻ (2 loops)      │──► JSON files
-                   │                                          │──► dead_letter_queue
+                   │  Extractor → Extraction Val. ↻ (2 loops) │──► review_queue (a person)
+                   │  → outcome_of (one routing rule)         │──► dead_letter_queue (an engineer)
                    └──────────────────────────────────────────┘
                          │                           │
                     [OUT OF SCOPE]              [OUT OF SCOPE]
@@ -92,7 +92,7 @@ Traditional approaches (regex scraping, template-based parsers) fail because:
 
 ## 2. Architecture Overview
 
-The Financial AI Pipeline is an industrial-grade **multi-agent extraction platform** that transforms unstructured financial announcements into strictly-typed, fully-traceable JSON assets. It is orchestrated as a **directed state machine** via LangGraph, with an embedded **self-correction loop** for quality assurance.
+The Financial AI Pipeline is an **LLM workflow** that transforms unstructured financial announcements into strictly-typed, fully-traceable records. The flow is fixed in code as a **directed state machine** (LangGraph): only two steps call the LLM, and plain code checks each one. Two **self-correction loops** retry what a retry can fix, and one routing rule sends every document to exactly one of four places.
 
 ### 2.1 High-Level Flow
 
@@ -100,46 +100,39 @@ The Financial AI Pipeline is an industrial-grade **multi-agent extraction platfo
 source *.txt
       │
       ▼
- ┌──────────┐
- │  Reader  │  async file I/O, SHA-256 fingerprint
- │  Agent   │
- └────┬─────┘
-      │ raw_content
-      ▼
- ┌──────────┐
- │Classifier│  LLM → label {"M&A", "Dividend", "none", "unclear"}
- │  Agent   │       + verbatim evidence_quote
- └────┬─────┘
-      │ classification            ┌─ unparsable output / quote not in source
-      ▼                           │  → retry Classifier with feedback (own budget)
- ┌────────────────┐               │
+ ┌────────────────┐
+ │ Reader         │  code: stores the bytes + SHA-256; undecodable input → DLQ
+ └──────┬─────────┘
+        ▼
+ ┌────────────────┐
+ │ Classifier     │  LLM → "M&A" | "Dividend" | "none" | "unclear"
+ │                │        + a verbatim evidence_quote
+ └──────┬─────────┘
+        ▼                         ┌─ bad format / quote not in the text
+ ┌────────────────┐               │  → retry the Classifier with feedback (max 2)
  │ Classification │───────────────┘
- │ Validator      │  plain code, no LLM
- └────┬───────────┘
-      │ M&A / Dividend             none / unclear / budget spent → DLQ
-      ▼
- ┌──────────┐    ┌─────────────────┐
- │ Extractor│◄───│ RAG Retriever   │  Semantic few-shot from
- │  Agent   │    │ (ChromaDB)      │  historical extractions
- └────┬─────┘    └─────────────────┘
-      │ extracted_data         ▲
-      ▼                        │ on validated pass
- ┌──────────┐                  │
- │ Validator│──────────────────┘
- │  Agent   │  self-correction loop ← ─ ─ ─ ─ ─ ─
- └────┬─────┘                                  │
-      │ (pass/fail)                             │
-      ▼                                         │
- ┌──────────┐     ┌──────────────┐              │
- │   PASS   │     │ FAIL, budget │──────────────┘
- │ (persist)│     │  left        │  → Extractor (with feedback)
- └──────────┘     └──────┬───────┘
-                         │ FAIL (retry budget spent)
-                         ▼
-                    ┌──────────┐
-                    │   DLQ    │
-                    │ (cemetery)│
-                    └──────────┘
+ │ Validator      │  code, no LLM
+ └──────┬─────────┘
+        │ M&A / Dividend          (none → out of scope · unclear → human review)
+        ▼
+ ┌────────────────┐    ┌──────────────────┐
+ │ Extractor      │◄───│ RAG retriever    │  optional, off by default
+ │                │    │ (ChromaDB)       │
+ └──────┬─────────┘    └──────────────────┘
+        ▼                         ┌─ bad format / a present but invalid value
+ ┌────────────────┐               │  → retry the Extractor with feedback (max 3)
+ │ Extraction     │───────────────┘
+ │ Validator      │  code: REQUIRED fields, formats, cross-field rules
+ └──────┬─────────┘
+        ▼
+ ┌──────────────────────────────────────────────────────────────┐
+ │ outcome_of(state): one rule, from the failure category       │
+ │ (any step above can stop early and land here)                │
+ └───┬────────────────┬─────────────────┬────────────────────┬──┘
+     ▼                ▼                 ▼                    ▼
+  stored         human review      out of scope       dead-letter queue
+  extractions    review_queue      status only,       dead_letter_queue
+  (gold, SCD2)   a person decides  no queue           an engineer acts
 ```
 
 Output that does not even parse into the extraction schema (bad enum, malformed date, …) loops straight back from the Extractor to itself, without passing through the Validator — see §3.3.
@@ -148,13 +141,16 @@ Output that does not even parse into the extraction schema (bad enum, malformed 
 
 | Principle | Implementation |
 |-----------|---------------|
-| **State-as-Graph** | Every Agent reads/writes a single `PipelineState` TypedDict |
+| **State-as-Graph** | Every node reads/writes a single `PipelineState` TypedDict |
 | **Traceability by Contract** | Every output inherits `BaseDoc` → `Metadata` embedded at extraction time |
 | **Idempotent Persistence** | SHA-256 hash of raw content is the true dedup key, not LLM-generated UUID |
 | **Immutable Version History** | SCD Type 2 — archive-on-change, never overwrite |
-| **Self-Correction** | Validator → Extractor conditional edge with structured error feedback |
+| **Self-Correction** | Validator → Extractor (and Classification Validator → Classifier) conditional edges with structured error feedback |
+| **Retry by Failure Category** | `src/schemas/retry_policy.py`: only `structure` and `reference` failures are retried; `missing_info` and `business_rule` stop at once (§7.2) |
+| **One Routing Rule** | `src/schemas/outcome.py::outcome_of` maps every run to stored / human review / out of scope / DLQ from the failure category; storage and evaluation call the same function (§7.3) |
+| **Field Presence Levels** | REQUIRED / EXPECTED / OPTIONAL per field in the validation profiles: only a REQUIRED field may not be empty; format is checked only when a value is present |
 | **Zero-Code Extension** | Registry Pattern: add 1 schema file + 3 dict entries = new business line |
-| **RAG-Augmented Extraction** | ChromaDB per doc-type collection; embedding via SentenceTransformer (all-MiniLM-L6-v2); validated extractions written as vectors; first-pass extraction retrieves top-k semantic neighbours as few-shot context; retry passes do NOT re-query (avoid stale context) |
+| **RAG-Augmented Extraction (optional)** | Off by default (`RAG_ENABLED=false`). ChromaDB per doc-type collection; embedding via SentenceTransformer (all-MiniLM-L6-v2); validated extractions written as vectors; first-pass extraction retrieves top-k semantic neighbours as few-shot context; retry passes do NOT re-query (avoid stale context) |
 
 ---
 
@@ -230,9 +226,9 @@ def route_after_extraction_validation(state: PipelineState) -> Literal["extracto
 Three exit paths:
 - **`__end__`** — `validation_passed == True`: document is clean, proceed to persistence
 - **`extractor`** — `validation_passed == False` & `retry_count <= max_retries`: send back with feedback for re-extraction
-- **`error`** — fatal error, or the retry budget is spent: abort, route to DLQ
+- **`error`** — fatal error, a failure the retry policy does not retry, or the retry budget is spent: the run ends, and `outcome_of` decides where it goes (human review or DLQ, §7.3)
 
-`retry_count` is the number of retries already *performed*, so with `max_retries = 3` a document is extracted at most four times (first attempt + 3 retries). The node that records the last allowed failure (`src/nodes/retry.py::register_failure`) leaves `retry_count` at `max_retries` and sets `error`, which is what sends the document to the DLQ. The router's own `retry_count > max_retries` check is only a defensive backstop.
+`retry_count` is the number of retries already *performed*, so with `max_retries = 3` a document is extracted at most four times (first attempt + 3 retries). The node that records the last allowed failure (`src/nodes/retry.py::register_failure`) leaves `retry_count` at `max_retries` and sets `error`, which ends the run. A non-retryable failure (`missing_info`, `business_rule`) sets `error` on the first attempt, whatever budget is left. The router's own `retry_count > max_retries` check is only a defensive backstop.
 
 Two further routers cover the classify loop (`route_after_classifier`, `route_after_classification_validation`): an unparsable classification skips the Classification Validator and retries, a rejected one retries until `classify_retry_count > classify_max_retries`, and `none` / `unclear` (accepted but terminal, with `error` set) end the run. The classify and extract loops keep separate counters, so one cannot consume the other's budget.
 
@@ -370,6 +366,8 @@ if hash_matches:
 | First run of new file | No (no row exists) | Insert v1 |
 | Second run, file unchanged | Yes (hash identical) | **Skip** — idempotent no-op |
 | Second run, file edited | No (hash differs) | Archive v1 (`is_current=0`), insert v2 |
+| Second run, file unchanged, but the extraction differs (e.g. after a prompt change) | Yes | **Skip**: the first version stays. A better prompt does not refresh records whose source is unchanged (known limitation) |
+| Same content under another file name | Yes | **Skip**: no gold row for the new name; `documents` registers the new path |
 
 ---
 
@@ -459,7 +457,10 @@ Validator Node
                 │               │
                 │               └──→ Validator Node (re-evaluate)
                 │
-                └── retry budget spent (error flag set) → END (DLQ)
+                ├── failure not retryable (missing_info, business_rule) → END
+                │
+                └── retry budget spent (error flag set) → END
+                                         (outcome_of: human review or DLQ, §7.3)
 ```
 
 ### 7.2 Correction Feedback
@@ -473,40 +474,49 @@ user_prompt += (
 )
 ```
 
-This ensures the LLM is aware of its previous mistakes and can correct them without fabricating data.
+This makes the LLM aware of its previous mistakes. Feedback only helps where the model can fix the problem without inventing anything, so the **retry policy** (`src/schemas/retry_policy.py`) decides by failure category:
 
-### 7.3 Exhaustion → Dead Letter Queue
+| Category | Retried? | Why |
+|---|---|---|
+| `structure` (bad JSON, bad enum, bad date format, a present but invalid value) | Yes, within the loop's budget | The model usually fixes the shape |
+| `reference` (evidence quote not in the text) | Yes, within the classify budget | The quote is checked against the source, so a retry cannot pass by inventing one |
+| `missing_info` (a REQUIRED value is empty) | **No** | Feedback "field X is missing" pushes the model to fill it. Measured: scenario H2 (`results/scenarios/20261112-211858`) wrote a description into an unnamed target after one retry and was stored |
+| `business_rule` (a cross-field rule is broken) | **No** | The feedback states the constraint, not the truth, so a retry can satisfy it by changing any value |
+| `transient` (timeout, 429, 5xx) | By the LLM client only (SDK backoff, `llm_max_retries` = 2, 60 s timeout) | Not a quality problem |
+| `config_error` (401/403/404), `input_error`, `internal_error`, `unknown`, `ambiguous`, `out_of_scope` | No | Another attempt cannot change the answer |
 
-When the retry budget is spent (`max_retries` retries performed, default 3, and the last attempt still failed), the document is routed to `dead_letter_queue` via Branch B of the repository:
+When several rules fail at once and any of them may not be retried, the loop stops, and the most severe non-retryable failure becomes the primary one.
 
-```python
-async def _insert_dead_letter(self, final_state: dict) -> None:
-    failure = final_state.get("failure") or fallback_failure(last_error)
-    await conn.execute(
-        "INSERT INTO dead_letter_queue "
-        "(file_path, source_hash, doc_type, last_error, retry_count, "
-        "failed_stage, error_code, error_category, failure_details, "
-        "classification, correction_logs, failed_at) VALUES (...)",
-        ...
-    )
-```
+### 7.3 Where a Stopped Document Goes: Human Review or the Dead Letter Queue
 
-Every DLQ row says **where** and **why** the document stopped:
+When a run ends without a validated extraction, `src/schemas/outcome.py::outcome_of` decides where it goes, from the failure category alone (model confidence is never a routing signal):
 
-| Column | Meaning |
+| Outcome | Categories | Stored in | Who acts |
+|---|---|---|---|
+| `stored` | (validation passed, no error) | `extractions` (gold) | nobody |
+| `human_review` | `ambiguous` (`unclear`), `reference`, `missing_info`, `business_rule` | `review_queue` | a person decides about the document's content |
+| `out_of_scope` | `out_of_scope` (`none`) | no queue; `documents.last_status` | nobody: expected, not a failure |
+| `dlq` | `structure`, `transient`, `config_error`, `input_error`, `internal_error`, `unknown`, or no failure record | `dead_letter_queue` | an engineer |
+
+The repository and the evaluation (scenario gate, E4) call the same function, so they cannot disagree about where a document went.
+
+Every failure record, in the DLQ or the review queue, says **where** and **why** the document stopped:
+
+| Column (DLQ / review queue) | Meaning |
 |--------|---------|
-| `failed_stage` | `read`, `classify`, `classify_validate`, `extract`, `validate`, or `pipeline` (crash outside the graph, or an error with no `failure` record) |
-| `error_code` | Stable reason, e.g. `EVIDENCE_QUOTE_NOT_FOUND`, `CLASSIFICATION_UNCLEAR`, `UNSUPPORTED_DOC_TYPE`, `SCHEMA_PARSE_FAILED`, `LLM_CALL_FAILED`; for validator failures the most severe failed rule, e.g. `TARGET.NON_EMPTY`, `TIMELINE_ORDER` |
-| `error_category` | `transient`, `structure`, `reference`, `missing_info`, `business_rule`, `out_of_scope`, `ambiguous`, `input_error`, `unknown` |
+| `failed_stage` / `reason_stage` | `read`, `classify`, `classify_validate`, `extract`, `validate`, or `pipeline` (crash outside the graph, or an error with no `failure` record) |
+| `error_code` / `reason_code` | Stable reason, e.g. `EVIDENCE_QUOTE_NOT_FOUND`, `CLASSIFICATION_UNCLEAR`, `SCHEMA_PARSE_FAILED`, `LLM_CALL_FAILED`, `LLM_CONFIG_ERROR`; for validator failures the most severe failed rule, e.g. `TARGET.NON_EMPTY`, `TIMELINE_ORDER` |
+| `error_category` / `reason_category` | see the table above |
 | `failure_details` | JSON: every failed rule / check of the last attempt |
-| `classification` | JSON: the classifier's last accepted output (label, evidence quote, self-reported confidence) |
+| `classification` | JSON: the classifier's last output (label, evidence quote, self-reported confidence) |
 | `correction_logs` | JSON: the per-cycle correction history of both loops |
+| (review queue only) `extracted_data` | JSON: the fields extracted so far, so a reviewer only fills the gap |
 
-`out_of_scope` (`none` label) and `ambiguous` (`unclear`) are expected outcomes, not malfunctions; keep them out of any "failure rate" numerator or report them separately. Rows written before this schema existed keep `NULL` in these columns; `init_db()` adds the columns to an old database file in place.
+**Dead-letter queue.** One row per `(file_path, source_hash)`: re-running an unchanged file that fails again refreshes that row instead of adding a duplicate; editing the file produces a new row. A row stays as history after a later run settles the document; the dashboard lists only documents whose last run ended in the DLQ. In batch mode a pipeline that *raises* (rather than returning a failed state) is quarantined the same way (`pipeline` / `PIPELINE_EXCEPTION`); in single-file mode (`--file`) the exception propagates and nothing is stored.
 
-DLQ documents are **never mixed** with core assets — the `dead_letter_queue` table is a separate cemetery for manual investigation.
+**Review queue.** One **open** row per `(file_path, source_hash)`, refreshed on reruns. A later run that stores the document or finds it out of scope closes the open row as `superseded`. The row has `status` (open / resolved / superseded) and columns for the reviewer's `decision`, `decided_by` and `decided_at`; writing decisions back to gold is a proposal (`DOCS_REVIEW_WRITEBACK.md`), not built.
 
-There is one DLQ row per `(file_path, source_hash)`: re-running an unchanged file that fails again refreshes that row (latest error, `retry_count`, `failed_at`) instead of adding a duplicate; editing the file produces a new row. In batch mode a pipeline that *raises* (rather than returning a failed state) is quarantined the same way, with `last_error = "pipeline raised <ExceptionType>: <message>"`.
+Rows written before these schemas existed keep `NULL` in the newer columns; `init_db()` adds missing columns and tables to an old database file in place.
 
 ---
 
@@ -519,7 +529,7 @@ Every run is persisted — passed **and** failed documents — in a medallion la
 | Layer | Content | Storage | Written for |
 |-------|---------|---------|-------------|
 | **Bronze (raw)** | Original file bytes, write-once, file name = SHA-256 of the bytes (`src/storage/raw_store.py`); registry table `documents` (size, encoding, first/last seen) | `data/raw/<sha256>.txt` (object storage later — only `raw_uri` changes) | every document |
-| **Silver (staging)** | `step_runs`: one row per node execution (stage, attempt, outcome, error code/category, parsed output, raw LLM reply, model, prompt version, tokens, latency); `dead_letter_queue`; `correction_logs` | SQLite | every document / every attempt |
+| **Silver (staging)** | `step_runs`: one row per node execution (stage, attempt, outcome, error code/category, parsed output, raw LLM reply, model, prompt version, tokens, latency); `review_queue` (a person decides); `dead_letter_queue` (an engineer acts); `correction_logs` | SQLite | every document / every attempt |
 | **Gold (curated)** | `extractions`: validated results, SCD Type 2 | SQLite | passed documents only |
 
 Links between layers: `step_runs.run_id` groups one invocation; `source_hash` (in `step_runs`, `dead_letter_queue`, `extractions` and `metadata.source_hash`) points at the bronze object; `extractions.run_id` / `dead_letter_queue.run_id` point at the run that produced the row.
@@ -535,7 +545,7 @@ on 2026-11-12: it duplicated the gold and silver layers as a second source of tr
 
 - **SQLite Database** — queryable, versioned, machine-parseable
    - Connection: `aiosqlite` with WAL mode
-   - Schema: `src/storage/db.py` (`documents`, `step_runs`, `extractions`, `correction_logs`, `dead_letter_queue`)
+   - Schema: `src/storage/db.py` (`documents`, `step_runs`, `extractions`, `correction_logs`, `review_queue`, `dead_letter_queue`)
 
 ### 8.2 Database Schema
 
@@ -569,7 +579,7 @@ CREATE TABLE documents (
     last_file_path  TEXT NOT NULL,
     last_seen_at    TEXT NOT NULL,
     last_run_id     TEXT,
-    last_status     TEXT                  -- 'stored' | 'dlq'
+    last_status     TEXT                  -- stored | out_of_scope | human_review | dlq
 );
 
 -- Table 5: step_runs — silver audit trail, one row per node execution
@@ -602,7 +612,7 @@ CREATE TABLE correction_logs (
 -- Indexes: extractions(doc_id, is_current), extractions(source_hash),
 --          extractions(doc_type), correction_logs(doc_id)
 
--- Table 4: dead_letter_queue — Exhausted retry cemetery
+-- Table 4: dead_letter_queue — documents an engineer must act on
 CREATE TABLE dead_letter_queue (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     file_path       TEXT NOT NULL,
@@ -620,6 +630,32 @@ CREATE TABLE dead_letter_queue (
 );
 -- plus: INDEX idx_dlq_stage_code ON dead_letter_queue(failed_stage, error_code)
 -- correction_logs also gained a `loop` column ('classify' | 'extract').
+
+-- Table 6: review_queue — documents a person must decide on (since 2026-11-12)
+CREATE TABLE review_queue (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_path       TEXT NOT NULL,
+    source_hash     TEXT NOT NULL,
+    run_id          TEXT,
+    doc_type        TEXT,
+    reason_stage    TEXT NOT NULL,
+    reason_code     TEXT NOT NULL,
+    reason_category TEXT NOT NULL,
+    reason_message  TEXT,
+    failure_details TEXT,          -- JSON: every failed rule / problem
+    classification  TEXT,          -- JSON: classifier answer + evidence
+    extracted_data  TEXT,          -- JSON: fields extracted so far
+    correction_logs TEXT,          -- JSON
+    status          TEXT NOT NULL DEFAULT 'open',  -- open | resolved | superseded
+    decision        TEXT,          -- JSON: the reviewer's label / field values
+    decided_by      TEXT,
+    decided_at      TEXT,
+    notes           TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+-- plus: INDEX idx_review_status ON review_queue(status, reason_code),
+--       INDEX idx_review_doc ON review_queue(file_path, source_hash)
 ```
 
 ### 8.3 Repository Layer
@@ -632,11 +668,17 @@ class ExtractionRepository:
         # Step 1: bronze — write-once copy of the source text
         raw_uri = await store_raw(source_hash, final_state["raw_content"])
 
-        # Step 2: Route to correct branch
-        if validated:
-            await self._upsert_extraction(final_state)    # Branch A (gold)
-        else:
-            await self._insert_dead_letter(final_state)   # Branch B (DLQ)
+        # Step 2: route by outcome (the same rule the evaluation uses, §7.3)
+        status = outcome_of(final_state)
+        if status == "stored":
+            await self._upsert_extraction(final_state)    # gold
+        elif status == "human_review":
+            await self._upsert_review(final_state)        # review_queue
+        elif status == "dlq":
+            await self._insert_dead_letter(final_state)   # dead_letter_queue
+        # out_of_scope: no queue
+        if status in ("stored", "out_of_scope"):
+            await self._supersede_reviews(final_state)    # close open review rows
 
         # Step 3: documents registry + every step_runs record of this run
         await self._record_run(final_state, source_hash, raw_uri, status)
@@ -908,7 +950,7 @@ jobs:
 ```
 
 Three gates, sequential:
-1. **Unit tests** — 400+ tests, zero LLM calls. Every test runs against a private ChromaDB directory and an offline fake embedding function (`tests/conftest.py`), so nothing touches `data/chromadb` and nothing needs the network — except tests marked `real_embedder`, which load the actual sentence-transformers model. For a fully offline run: `pytest -m "not integration and not real_embedder"`.
+1. **Unit tests** — 480+ tests, zero LLM calls. Every test runs against a private ChromaDB directory and an offline fake embedding function (`tests/conftest.py`), so nothing touches `data/chromadb` and nothing needs the network — except tests marked `real_embedder`, which load the actual sentence-transformers model. For a fully offline run: `pytest -m "not integration and not real_embedder"`.
 2. **Scenario gate** — full pipeline end-to-end with real LLM, exit code 0/1 gates the build
 3. **Black lint** — format consistency, with `black==25.11.0` pinned in `requirements-dev.txt` and installed alongside the test tooling
 
@@ -955,7 +997,9 @@ Each `run_pipeline()` call independently invokes the full LangGraph state machin
 financial-ai-pipeline/
 │
 ├── DOCS_SYSTEM_DESIGN.md         ← This document
+├── DOCS_REVIEW_WRITEBACK.md      ← Proposal: human review decisions → gold (not decided)
 ├── README.md                     ← Project overview and usage
+├── Makefile                      ← make dash / test / scenarios / e4-estimate
 ├── requirements*.txt             ← runtime / dev / dashboard dependencies
 ├── .env                          ← Secrets (LLM API key, etc.) — copy from .env.example
 │
@@ -967,13 +1011,20 @@ financial-ai-pipeline/
 │   │   └── e1/README.md          ← E1 set is kept outside the repo (blind labels, size)
 │   ├── evaluators/
 │   │   ├── scenarios.py          ← outcome gate + field gate, pending, inconclusive
-│   │   └── e1.py                 ← gold projection, coverage, McNemar, repetition agreement
+│   │   ├── e1.py                 ← gold projection, coverage, McNemar, repetition agreement
+│   │   └── e4.py                 ← end to end: outcome per label, per label scope
+│   ├── analysis/field_presence.py ← field mention rates in real filings (no LLM)
 │   ├── run_scenarios.py          ← CI scenario gate (end to end, real LLM)
-│   └── run_e1.py                 ← classification-stage experiments
+│   ├── run_e1.py                 ← classification-stage experiments
+│   ├── run_e4.py                 ← whole pipeline on the E1 dev split
+│   └── E2_DESIGN.md              ← field-level extraction evaluation (design only)
 │
 ├── results/
 │   ├── SUMMARY.md                ← State of the project and the latest measured numbers
-│   └── e1/                       ← One folder per E1 run (index: results/e1/README.md)
+│   ├── e1/                       ← One folder per E1 run (index: results/e1/README.md)
+│   ├── e4/                       ← One folder per E4 run (index: results/e4/README.md)
+│   ├── scenarios/                ← One folder per local scenario-gate run
+│   └── field_presence/           ← Field mention rates (no LLM)
 │
 ├── .github/workflows/
 │   └── ci.yml                    ← CI gates: unit tests → scenario gate → lint
@@ -982,8 +1033,10 @@ financial-ai-pipeline/
 ├── src/
 │   ├── main.py                   ← CLI entry point (argparse)
 │   ├── config.py                 ← Pydantic Settings
-│   ├── dashboard.py              ← Streamlit monitoring UI (pipeline.db)
-│   ├── e1_dashboard.py           ← Streamlit UI for E1 runs (results/e1/)
+│   ├── app.py                    ← one Streamlit entry point for all pages (make dash)
+│   ├── dashboard.py              ← page: pipeline database (four outcomes, review queue, DLQ)
+│   ├── e1_dashboard.py           ← page: E1 runs (results/e1/)
+│   ├── e4_dashboard.py           ← page: E4 runs (results/e4/)
 │   │
 │   ├── workflows/
 │   │   ├── edges.py              ← routing functions (state in, next node out)
@@ -1002,7 +1055,9 @@ financial-ai-pipeline/
 │   ├── schemas/                  ← contracts: nodes, graph, storage and evals depend on these
 │   │   ├── state.py              ← PipelineState (TypedDict + reducers)
 │   │   ├── events.py             ← StepRun / FailureInfo / CorrectionLog audit records
-│   │   ├── failure.py            ← DLQ failure vocabulary (stages, categories, codes)
+│   │   ├── failure.py            ← failure vocabulary (stages, categories, codes)
+│   │   ├── outcome.py            ← outcome_of: stored / human review / out of scope / DLQ
+│   │   ├── retry_policy.py       ← which failure categories may be retried
 │   │   ├── classification.py     ← labels + ClassificationResult (classifier output)
 │   │   ├── base.py               ← Metadata + BaseDoc (foundation)
 │   │   └── extraction/
@@ -1010,7 +1065,7 @@ financial-ai-pipeline/
 │   │       ├── base_model.py     ← BaseExtractionModel (shared validators)
 │   │       ├── manda.py          ← M&A two-model contract
 │   │       ├── dividend.py       ← Dividend two-model contract
-│   │       └── profiles.py       ← ValidationProfiles (allowed-value sets per business line)
+│   │       └── profiles.py       ← ValidationProfiles (allowed values + field presence levels)
 │   │
 │   ├── rag/                      ← RAG-augmented extraction (RAG_ENABLED, off by default)
 │   │   ├── __init__.py
@@ -1020,7 +1075,8 @@ financial-ai-pipeline/
 │   │   └── retriever.py          ← top-k semantic search → few-shot context
 │   │
 │   ├── llm/
-│   │   └── client.py             ← OpenAI-SDK client (DeepSeek-compatible) + JSON parsing
+│   │   ├── client.py             ← OpenAI-SDK client (DeepSeek-compatible, explicit retries + timeout)
+│   │   └── errors.py             ← final API error → config_error / input_error / transient
 │   │
 │   ├── prompts/
 │   │   ├── registry.py           ← load_prompt(): verbatim load, strict $param rendering
@@ -1029,17 +1085,16 @@ financial-ai-pipeline/
 │   ├── utils/
 │   │   └── hashing.py            ← SHA-256 content hash (shared key)
 │   │
-│   ├── evaluation/
-│   │   └── e1.py                 ← E1 scoring: gold projection, coverage, McNemar
-│   │
 │   ├── viz/
-│   │   └── e1_data.py            ← data shaping for e1_dashboard.py (no Streamlit, unit-tested)
+│   │   ├── e1_data.py            ← data shaping for the E1 page (no Streamlit, unit-tested)
+│   │   ├── e4_data.py            ← data shaping for the E4 page
+│   │   └── pipeline_db.py        ← read-only, per-query SQLite reads for the pipeline-DB page
 │   │
 │   └── storage/
 │       ├── __init__.py           ← Repository + init_db exports
 │       ├── db.py                 ← aiosqlite connection + schema DDL + migrations
 │       ├── raw_store.py          ← bronze: write-once content-addressed texts
-│       └── repository.py         ← raw + gold/DLQ + step_runs persistence
+│       └── repository.py         ← routes by outcome: gold / review_queue / DLQ + step_runs
 │
 ├── data/                         ← SQLite database + raw/ bronze texts (local, git-ignored)
 │
@@ -1048,14 +1103,14 @@ financial-ai-pipeline/
 │   ├── fake_embedding.py         ← Offline deterministic embedding function
 │   ├── test_workflows/           ← Routers, scripted-LLM whole-graph runs, audit trail, layering rules
 │   ├── test_cli/                 ← Batch mode, concurrency, crash handling
-│   ├── test_eval/                ← Scenario-gate scoring, E1 scoring and runners
+│   ├── test_eval/                ← Scenario-gate, E1 and E4 scoring and runners
 │   ├── test_nodes/               ← One file per node + input windows, retries, failure records
 │   ├── test_storage/             ← SQLite repository, raw store
 │   ├── test_llm/                 ← LLM client call records
 │   ├── test_rag/                 ← Vector store + retriever
 │   ├── test_schemas/             ← Two-model contracts
 │   ├── test_prompts/             ← Template loading and rendering
-│   └── test_viz/                 ← E1 dashboard data + headless render
+│   └── test_viz/                 ← Dashboard data layers + headless renders
 │
 ├── requirements.txt              ← Runtime dependencies
 ├── requirements-dev.txt          ← Test + lint tooling (pytest, black==25.11.0)
@@ -1067,5 +1122,5 @@ financial-ai-pipeline/
 
 ---
 
-> **End of White Paper — Financial AI Pipeline v1.0.0**  
+> **End of White Paper — Financial AI Pipeline v1.1.0**  
 > *"Every asset has a version; every version has a hash; every hash has a proof."*
