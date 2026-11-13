@@ -1,8 +1,8 @@
 # Financial AI Pipeline
 
-![Badge](https://img.shields.io/badge/Python-3.11%2B-blue) ![Badge](https://img.shields.io/badge/LangGraph-StateGraph-orange) ![Badge](https://img.shields.io/badge/LLM-DeepSeek%20(OpenAI--compatible)-green) ![Badge](https://img.shields.io/badge/Tests-200%2B%20passing-brightgreen)
+![Badge](https://img.shields.io/badge/Python-3.11%2B-blue) ![Badge](https://img.shields.io/badge/LangGraph-StateGraph-orange) ![Badge](https://img.shields.io/badge/LLM-DeepSeek%20(OpenAI--compatible)-green) ![Badge](https://img.shields.io/badge/Tests-480%2B%20passing-brightgreen)
 
-> **A self-correcting, multi-agent LLM pipeline that turns unstructured financial announcements (M&A, dividends) into strictly-typed, versioned, fully-traceable JSON — orchestrated as a LangGraph state machine with RAG-augmented extraction and a CI scenario gate.**
+> **A self-correcting LLM workflow that turns unstructured financial announcements (M&A, dividends) into strictly-typed, versioned, fully-traceable records. The flow is fixed in code (a LangGraph state machine); two steps call the LLM and code checks each one. Every document ends in exactly one of four places, and a CI scenario gate checks each path.**
 
 ---
 
@@ -24,14 +24,14 @@ Financial institutions ingest hundreds of unstructured announcements daily — S
 
 This pipeline combines an LLM extraction step with a deterministic, self-correcting state machine (LangGraph) to produce structured, versioned, traceable extraction results from raw `.txt` announcements:
 
-- **Reader → Classifier → Classification Validator → Extractor → Validator**, each an independent LangGraph node reading/writing a shared `PipelineState`. Only the Classifier and the Extractor call an LLM; the Reader and both validators are plain code
-- **Two self-correction loops, each with its own retry budget**: (1) *classify* — an unparsable label, or an evidence quote that does not occur in the source text, sends the document back to the Classifier with the error type as feedback (`classify_max_retries`, default 2); (2) *extract* — output that doesn't parse into the schema, or a value that is present but invalid, routes back to the Extractor (`max_retries`, default 3). **Retry policy** (`src/schemas/retry_policy.py`): a missing required value (`missing_info`) or a broken cross-field rule (`business_rule`) is never retried, because the feedback would push the model to invent a value; it goes to human review. Transient API failures are retried by the LLM client (SDK backoff, `llm_max_retries`=2, 60 s timeout), not by these loops. A document that spends a budget is quarantined to the Dead Letter Queue
-- **Classifier labels**: `M&A`, `Dividend`, `none` (clearly neither) and `unclear` (cannot decide). `none` / `unclear` end the document at the classification stage (DLQ codes `UNSUPPORTED_DOC_TYPE` / `CLASSIFICATION_UNCLEAR`) so no extraction is spent on them
-- **Stage-tagged Dead Letter Queue**: every DLQ row records `failed_stage`, `error_code` and `error_category` (plus the classifier output and the per-cycle correction history), so failures can be counted per stage instead of grepping error text
+- **Reader → Classifier → Classification Validator → Extractor → Extraction Validator**, each an independent LangGraph node reading/writing a shared `PipelineState`. Only the Classifier and the Extractor call an LLM; the Reader and both validators are plain code
+- **Two self-correction loops, each with its own retry budget**: (1) *classify* — an unparsable label, or an evidence quote that does not occur in the source text, sends the document back to the Classifier with the error type as feedback (`classify_max_retries`, default 2); (2) *extract* — output that doesn't parse into the schema, or a value that is present but invalid, routes back to the Extractor (`max_retries`, default 3). **Retry policy** (`src/schemas/retry_policy.py`): a missing required value (`missing_info`) or a broken cross-field rule (`business_rule`) is never retried, because the feedback would push the model to invent a value; it goes to human review. Transient API failures are retried by the LLM client (SDK backoff, `llm_max_retries`=2, 60 s timeout), not by these loops. When a budget is spent, the failure's category decides where the document goes (see *Four outcomes* below)
+- **Classifier labels**: `M&A`, `Dividend`, `none` (clearly neither) and `unclear` (cannot decide). `none` / `unclear` end the document at the classification stage, so no extraction is spent on them: `none` is out of scope (no queue), `unclear` goes to human review
+- **Stage-tagged failures**: every failure records its stage, error code and category (plus the classifier output and the per-cycle correction history) in the DLQ or the review queue, so failures can be counted per stage and code instead of grepping error text
 - **Four outcomes, two queues**: one rule (`src/schemas/outcome.py::outcome_of`) sends every run to exactly one place: `extractions` (stored), `review_queue` (a *person* decides: `unclear`, a missing REQUIRED field, a broken business rule, a quote never found), `dead_letter_queue` (an *engineer* acts: infrastructure, input, bugs, output that never parsed), or no queue for out-of-scope filings. `documents.last_status` records the outcome; evaluation uses the same function
 - **Two-model data isolation**: the LLM only ever fills business fields (`MandaExtraction`, `DividendExtraction`); the pipeline itself owns provenance (`doc_id`, `Metadata`, audit trail) so the model can never corrupt controlled fields
 - **SHA-256 idempotency + SCD Type 2 versioning**: re-running on unchanged content is a no-op; re-running on an edited file archives the old version and inserts a new one — nothing is ever overwritten
-- **RAG-augmented extraction**: validated past extractions are embedded (SentenceTransformer, local) and stored in ChromaDB per document type, then retrieved as few-shot context on first-pass extraction. **Off by default** (`RAG_ENABLED=false`): with RAG on, a batch run feeds earlier documents' results to later ones, so results depend on processing order — it stays off for evaluation, and its effect on accuracy has not been measured.
+- **Optional RAG-augmented extraction**: validated past extractions are embedded (SentenceTransformer, local) and stored in ChromaDB per document type, then retrieved as few-shot context on first-pass extraction. **Off by default** (`RAG_ENABLED=false`): with RAG on, a batch run feeds earlier documents' results to later ones, so results depend on processing order — it stays off for evaluation, and its effect on accuracy has not been measured.
 - **CI scenario gate**: one synthetic case per pipeline path, run end to end with the real model; each case must reach its expected outcome (stored / out of scope / human review / DLQ) and stored cases must match on every REQUIRED field. Outcome and field accuracy are gated separately, never pooled
 
 Currently supports two document types (**M&A**, **Dividend**) via a registry pattern — adding a new type requires a new schema file and a few dict entries, no changes to graph topology or node logic.
@@ -44,46 +44,39 @@ Currently supports two document types (**M&A**, **Dividend**) via a registry pat
 source *.txt
       │
       ▼
- ┌──────────┐
- │  Reader  │  async file I/O, SHA-256 fingerprint
- │  Agent   │
- └────┬─────┘
-      │ raw_content
-      ▼
- ┌──────────┐
- │Classifier│  LLM → label ("M&A" | "Dividend" | "none" | "unclear")
- │  Agent   │       + verbatim evidence_quote
- └────┬─────┘
-      │ classification            ┌─ unparsable output / quote not in source
-      ▼                           │  → retry Classifier with feedback (own budget)
- ┌────────────────┐               │
+ ┌────────────────┐
+ │ Reader         │  code: stores the bytes + SHA-256; undecodable input → DLQ
+ └──────┬─────────┘
+        ▼
+ ┌────────────────┐
+ │ Classifier     │  LLM → "M&A" | "Dividend" | "none" | "unclear"
+ │                │        + a verbatim evidence_quote
+ └──────┬─────────┘
+        ▼                         ┌─ bad format / quote not in the text
+ ┌────────────────┐               │  → retry the Classifier with feedback (max 2)
  │ Classification │───────────────┘
- │ Validator      │  plain code, no LLM
- └────┬───────────┘
-      │ M&A / Dividend             none / unclear / budget spent → DLQ
-      ▼
- ┌──────────┐    ┌─────────────────┐
- │ Extractor│◄───│ RAG Retriever   │  Semantic few-shot from
- │  Agent   │    │ (ChromaDB)      │  historical extractions
- └────┬─────┘    └─────────────────┘
-      │ extracted_data         ▲
-      ▼                        │ on validated pass
- ┌──────────┐                  │
- │Extraction│──────────────────┘
- │Validator │  plain code, no LLM; self-correction loop ← ─ ─
- └────┬─────┘                                  │
-      │ (pass/fail)                             │
-      ▼                                         │
- ┌──────────┐     ┌──────────────┐              │
- │   PASS   │     │ FAIL, budget │──────────────┘
- │ (persist)│     │  left        │  → Extractor (with feedback)
- └──────────┘     └──────┬───────┘
-                         │ FAIL (retry budget spent)
-                         ▼
-                    ┌──────────┐
-                    │   DLQ    │
-                    │(dead letter)│
-                    └──────────┘
+ │ Validator      │  code, no LLM
+ └──────┬─────────┘
+        │ M&A / Dividend          (none → out of scope · unclear → human review)
+        ▼
+ ┌────────────────┐    ┌──────────────────┐
+ │ Extractor      │◄───│ RAG retriever    │  optional, off by default
+ │                │    │ (ChromaDB)       │
+ └──────┬─────────┘    └──────────────────┘
+        ▼                         ┌─ bad format / a present but invalid value
+ ┌────────────────┐               │  → retry the Extractor with feedback (max 3)
+ │ Extraction     │───────────────┘
+ │ Validator      │  code: REQUIRED fields, formats, cross-field rules
+ └──────┬─────────┘
+        ▼
+ ┌──────────────────────────────────────────────────────────────┐
+ │ outcome_of(state): one rule, from the failure category       │
+ │ (any step above can stop early and land here)                │
+ └───┬────────────────┬─────────────────┬────────────────────┬──┘
+     ▼                ▼                 ▼                    ▼
+  stored         human review      out of scope       dead-letter queue
+  extractions    review_queue      status only,       dead_letter_queue
+  (gold, SCD2)   a person decides  no queue           an engineer acts
 ```
 
 Every run is persisted in a medallion layout — passed **and** failed documents alike:
@@ -96,7 +89,7 @@ Every run is persisted in a medallion layout — passed **and** failed documents
 
 There is no LLM-as-judge yet, so "gold" means *passed the deterministic validators*, not *verified correct*.
 
-Failure stages recorded in the DLQ: `read`, `classify`, `classify_validate`, `extract`, `validate` (and `pipeline` for a crash outside the graph). Categories: `transient`, `structure`, `reference`, `missing_info`, `business_rule`, `out_of_scope`, `ambiguous`, `input_error`, `unknown`. Older databases are migrated in place (`ALTER TABLE … ADD COLUMN`) the next time `init_db()` runs; rows written before the migration keep `NULL` in the new columns.
+Failure stages: `read`, `classify`, `classify_validate`, `extract`, `validate` (and `pipeline` for a crash outside the graph). Categories: `transient`, `config_error`, `structure`, `reference`, `missing_info`, `business_rule`, `out_of_scope`, `ambiguous`, `input_error`, `internal_error`, `unknown`. The category decides both the retry (`src/schemas/retry_policy.py`) and the outcome (`src/schemas/outcome.py`). Older databases are migrated in place (`ALTER TABLE … ADD COLUMN`) the next time `init_db()` runs; rows written before the migration keep `NULL` in the new columns.
 
 **See [DOCS_SYSTEM_DESIGN.md](./DOCS_SYSTEM_DESIGN.md) for the full system design white paper**, including the state schema, the two-model isolation protocol, the idempotency guard implementation, RAG integration details, and the CI evaluation engine.
 
@@ -106,17 +99,20 @@ Failure stages recorded in the DLQ: `read`, `classify`, `classify_validate`, `ex
 
 | Feature | Implementation |
 |---------|---------------|
-| **State-as-Graph** | Every agent reads/writes a single `PipelineState` `TypedDict` compiled via LangGraph's `StateGraph` |
+| **State-as-Graph** | Every node reads/writes a single `PipelineState` `TypedDict` compiled via LangGraph's `StateGraph` |
 | **Two-Model Isolation** | LLM-facing `BaseModel` (business fields only, all `Optional`) is promoted to a pipeline-owned `BaseDoc` (with `doc_id` + `Metadata`) via a `from_extraction()` classmethod — the LLM never touches provenance fields |
 | **Idempotent Persistence** | SHA-256 hash of raw file content is the true dedup key (not the per-run UUID `doc_id`) — re-running on unchanged content is a guaranteed no-op |
 | **Immutable Version History** | SCD Type 2 (`version` + `is_current` columns) — file edits archive the old row and insert a new version, never overwrite |
 | **Self-Correction Loops** | Conditional LangGraph edges route a rejected classification back to the Classifier and a failed extraction back to the Extractor, each with the validator's structured error feedback injected into the next prompt and each with an independent retry budget |
 | **Evidence-checked Classification** | The Classifier must return a verbatim `evidence_quote`; plain code checks that it occurs in the source text (whitespace-, case- and typographic-quote-insensitive). The model's self-reported `confidence` is logged but never used for routing |
-| **Stage-tagged DLQ** | Every fatal exit carries a `failure` record (stage, code, category); the DLQ stores it in columns together with the classifier output and the full correction history |
+| **Stage-tagged failures** | Every fatal exit carries a `failure` record (stage, code, category); the DLQ or the review queue stores it in columns together with the classifier output and the full correction history |
+| **One routing rule** | `outcome_of` maps every run to stored / human review / out of scope / DLQ from the failure category; storage and evaluation call the same function |
+| **Retry by failure category** | Format and quote errors are retried with feedback; a missing REQUIRED value or a broken business rule is never retried (feedback pushes the model to invent a value) and goes to a person |
+| **Field presence levels** | REQUIRED / EXPECTED / OPTIONAL per field in the validation profiles: only REQUIRED fields may not be empty, an empty EXPECTED field is stored with a warning |
 | **Zero-Code Extension** | Adding a document type = 1 new schema file + 3 registry dict entries in `src/nodes/extractor.py` — no changes to graph topology or node logic (optional extras: validator rules, a RAG collection in `COLLECTION_MAP`, and `FIELD_TYPE_MAP` for the scenario gate) |
 | **RAG-Augmented Extraction** | ChromaDB collection per document type; embeddings via local `SentenceTransformer` (`all-MiniLM-L6-v2`); only validated extractions are embedded; superseded versions are de-indexed and a file is never retrieved as its own example; first-pass extraction only (retries reuse the same context). Off by default (`RAG_ENABLED=false`) |
 | **Async Concurrency** | `asyncio.Semaphore` + `asyncio.gather` — batch mode runs each file's LangGraph state machine independently and concurrently |
-| **Operation Visibility** | Streamlit dashboard (`src/dashboard.py`) reads `data/pipeline.db` live for KPI cards, a Dead Letter panel, and per-`doc_id` self-correction audit drill-downs |
+| **Operation Visibility** | One Streamlit app (`make dash`, `src/app.py`) with three pages: the E4 end-to-end funnel, E1 runs, and the pipeline database (four outcomes, the human review queue, the DLQ, per-`doc_id` self-correction audit drill-downs) |
 | **CI Scenario Gate** | `evals/run_scenarios.py` runs one synthetic case per pipeline path end to end; the build fails if any case misses its expected outcome or a REQUIRED field |
 
 ---
@@ -141,7 +137,7 @@ Failure stages recorded in the DLQ: `read`, `classify`, `classify_validate`, `ex
 - **sentence-transformers** (`all-MiniLM-L6-v2`) — local embeddings
 
 ### Tooling & Ops
-- **Streamlit** + **Plotly** — monitoring dashboard
+- **Streamlit** + **Plotly** — dashboards (pipeline database, E1 and E4 runs)
 - **loguru** — structured logging
 - **pytest** / **pytest-asyncio** / **pytest-cov** — test suite
 - **black** — formatting, enforced in CI
@@ -184,14 +180,16 @@ python -m src.main --file evals/datasets/scenarios/inputs/ma_microsoft_activisio
 python -m src.main --dir evals/datasets/scenarios/inputs --concurrency 5
 ```
 
-### Launch the monitoring dashboard
+### Open the dashboards
 
 Requires the optional dashboard dependencies (`pip install -r requirements-dashboard.txt`).
 
 ```bash
-streamlit run src/dashboard.py
-# → http://localhost:8501
+make dash
+# → http://localhost:8501, pages: E4 end to end · E1 classification · pipeline database
 ```
+
+Other shortcuts: `make test` (offline tests), `make scenarios` (scenario gate, costs tokens), `make e4-estimate` (E4 case count and token estimate, no LLM).
 
 ### Run the test suite
 
@@ -223,11 +221,19 @@ python evals/run_e1.py --reps 2 --max-calls 630
 Browse a run (variant comparison, outcome funnel, per-document trace with the classifier's window and the model's evidence quote highlighted). Served on localhost only (`.streamlit/config.toml`); cases that are not human-verified are hidden in the trace unless you opt in:
 
 ```bash
-pip install -r requirements-dashboard.txt
-streamlit run src/e1_dashboard.py
+make dash   # then open the "E1 · classification" page
 ```
 
 Results go to `results/e1/<UTC timestamp>_<tag>/` (`manifest.json` with dataset/input hashes, model, temperature, git commit; `summary.json`; per-case CSV). Gold labels are projected onto the two supported types (`mgmt_change`-only filings count as `none`). Per-case files never show draft labels of cases that are not yet human-verified.
+
+### Run the whole pipeline on the E1 dev split (E4)
+
+```bash
+python -m evals.run_e4 --estimate                          # no LLM: cases and token estimate
+python -m evals.run_e4 --tag dev --model deepseek-flash    # real run
+```
+
+Each document's outcome (stored / human review / out of scope / DLQ) is reported per label, separately for human-verified and draft labels, in `results/e4/<UTC timestamp>_<tag>/`. Field values are not scored here; that is E2 (`evals/E2_DESIGN.md`, designed, not built).
 
 ---
 
@@ -236,18 +242,24 @@ Results go to `results/e1/<UTC timestamp>_<tag>/` (`manifest.json` with dataset/
 ```
 financial-ai-pipeline/
 ├── DOCS_SYSTEM_DESIGN.md         ← Full system design white paper
+├── DOCS_REVIEW_WRITEBACK.md      ← Proposal: human review decisions → gold (not decided)
 ├── README.md                     ← You are here
+├── Makefile                      ← make dash / test / scenarios / e4-estimate
 │
 ├── evals/                         ← probabilistic evaluation (see evals/README.md)
 │   ├── datasets/scenarios/        ← inputs/ + cases/ (one synthetic case per pipeline path)
 │   ├── datasets/e1/README.md      ← E1 classification set lives outside the repo
-│   ├── evaluators/                ← scenarios.py (outcome + field gates), e1.py (classification scoring)
+│   ├── evaluators/                ← scenarios.py (outcome + field gates), e1.py (classification), e4.py (end to end)
+│   ├── analysis/field_presence.py ← how often fields are mentioned in real filings (no LLM)
 │   ├── run_scenarios.py           ← CI scenario gate: end to end, real LLM
-│   └── run_e1.py                  ← classification-stage experiments
+│   ├── run_e1.py                  ← classification-stage experiments
+│   ├── run_e4.py                  ← whole pipeline on the E1 dev split
+│   └── E2_DESIGN.md               ← field-level extraction evaluation (design only)
 │
 ├── results/
 │   ├── SUMMARY.md                 ← Project state + latest measured numbers
 │   ├── e1/                        ← One folder per E1 run (index: results/e1/README.md)
+│   ├── e4/                        ← One folder per E4 run (index: results/e4/README.md)
 │   ├── scenarios/                 ← One folder per local scenario-gate run
 │   └── field_presence/            ← Field mention rates in real filings (no LLM)
 │
@@ -258,8 +270,10 @@ financial-ai-pipeline/
 ├── src/
 │   ├── main.py                    ← CLI entry point (--file / --dir)
 │   ├── config.py                  ← Pydantic Settings (env-driven)
-│   ├── dashboard.py               ← Streamlit monitoring UI (pipeline.db)
-│   ├── e1_dashboard.py            ← Streamlit UI for E1 runs (results/e1/)
+│   ├── app.py                     ← one Streamlit entry point for all pages (make dash)
+│   ├── dashboard.py               ← page: pipeline database (four outcomes, review queue, DLQ)
+│   ├── e1_dashboard.py            ← page: E1 runs (results/e1/)
+│   ├── e4_dashboard.py            ← page: E4 runs (results/e4/)
 │   │
 │   ├── workflows/edges.py         ← routing functions (where to go next)
 │   ├── workflows/graph.py         ← wiring: nodes + edges → compiled StateGraph
@@ -277,22 +291,25 @@ financial-ai-pipeline/
 │   ├── schemas/                    ← contracts (no logic depends on a node)
 │   │   ├── state.py                ← PipelineState (graph state, reducers)
 │   │   ├── events.py               ← StepRun / FailureInfo / CorrectionLog audit records
-│   │   ├── failure.py              ← DLQ failure vocabulary (stages, categories, codes)
+│   │   ├── failure.py              ← failure vocabulary (stages, categories, codes)
+│   │   ├── outcome.py              ← outcome_of: stored / human review / out of scope / DLQ
+│   │   ├── retry_policy.py         ← which failure categories may be retried
 │   │   ├── classification.py       ← labels + ClassificationResult (LLM output)
 │   │   ├── base.py                 ← Metadata + BaseDoc
-│   │   └── extraction/             ← per-doc-type two-model contracts (LLM output)
+│   │   └── extraction/             ← per-doc-type two-model contracts + field presence levels
 │   │
 │   ├── rag/                        ← embedder, ChromaDB client, retriever (off by default)
-│   ├── llm/client.py                ← OpenAI-SDK LLM client (DeepSeek-compatible)
+│   ├── llm/client.py                ← OpenAI-SDK LLM client (explicit retries + timeout)
+│   ├── llm/errors.py                ← final API error → config_error / input_error / transient
 │   ├── prompts/                     ← prompt assets: templates/*.md + registry.py loader
 │   │
 │   ├── utils/hashing.py             ← SHA-256 content hash (shared key)
-│   ├── viz/e1_data.py               ← data shaping for e1_dashboard.py (unit-tested)
+│   ├── viz/                         ← data shaping for the dashboard pages (no Streamlit, unit-tested)
 │   │
 │   └── storage/
 │       ├── db.py                    ← aiosqlite schema DDL + in-place migrations
 │       ├── raw_store.py             ← bronze: write-once content-addressed source texts
-│       └── repository.py            ← raw + gold/DLQ + step_runs persistence
+│       └── repository.py            ← routes by outcome: gold / review_queue / DLQ + step_runs
 │
 └── tests/                          ← unit + integration tests, mirrors src/
     ├── test_nodes/  test_workflows/  test_storage/  test_llm/  test_rag/
@@ -311,12 +328,15 @@ financial-ai-pipeline/
 | [results/SUMMARY.md](./results/SUMMARY.md) | Current state of the project, latest measured evaluation numbers, open issues |
 | [evals/README.md](./evals/README.md) | Evaluation suite: datasets, evaluators, how to run the scenario gate and E1 |
 | [results/e1/README.md](./results/e1/README.md) | Index of E1 evaluation runs and how a run folder is laid out |
+| [results/e4/README.md](./results/e4/README.md) · [results/scenarios/README.md](./results/scenarios/README.md) | Index of end-to-end runs and scenario-gate runs |
+| [evals/E2_DESIGN.md](./evals/E2_DESIGN.md) | Design of the field-level extraction evaluation (not built) |
+| [DOCS_REVIEW_WRITEBACK.md](./DOCS_REVIEW_WRITEBACK.md) | Proposal for writing human review decisions to gold (open questions) |
 
 ---
 
 ## 🧪 Testing & CI
 
-- **400+ unit tests** across nodes, schemas, storage, graph routing, the RAG layer and the evaluation code (`pytest -m "not integration"`, no LLM calls). Each test gets a private vector store and an offline fake embedder; add `and not real_embedder` to skip the few tests that load the real model: `pytest -m "not integration and not real_embedder"`
+- **480+ unit tests** across nodes, schemas, storage, graph routing, the RAG layer, the dashboards' data layer and the evaluation code (`pytest -m "not integration"` or `make test`, no LLM calls; 4 more `integration` tests call the real API). Each test gets a private vector store and an offline fake embedder; add `and not real_embedder` to skip the few tests that load the real model: `pytest -m "not integration and not real_embedder"`
 - **Scenario gate** (`evals/run_scenarios.py`) runs one synthetic case per pipeline path end to end with the real model. It gates on the expected outcome and, for stored cases, on every REQUIRED field (field-type-aware comparison: `enum`, `numeric` ±1 %, `bool`, `date`, `text_lower`; per-field overrides `date_range`, `fuzzy_match`, `accept_null`). It is a regression gate, not a quality measurement: quality on real filings is measured by E1
 - **GitHub Actions CI** (`.github/workflows/ci.yml`) runs three sequential gates on every push to `main` and every pull request into it: unit tests → scenario gate → `black` lint check. The scenario gate needs the `DEEPSEEK_API_KEY` secret: it is skipped (with a warning) on fork PRs, but a push without the secret fails the build
 
